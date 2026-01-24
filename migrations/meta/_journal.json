@@ -1,0 +1,48 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1768820674253,
+      "tag": "0000_gifted_the_leader",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1768950000000,
+      "tag": "0001_add_ready_to_order_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1768960000000,
+      "tag": "0002_add_waiter_tracking",
+      "breakpoints": false
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1768942959982,
+      "tag": "0003_add_placed_by_staff_id_to_orders",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1769197359490,
+      "tag": "0004_outgoing_bill_hollister",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1769198365084,
+      "tag": "0005_worried_zaran",
+      "breakpoints": true
+    }
+  ]
+}

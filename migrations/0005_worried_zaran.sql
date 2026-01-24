@@ -1,0 +1,1 @@
+ALTER TABLE "cities" ALTER COLUMN "code" SET DATA TYPE varchar(50);
