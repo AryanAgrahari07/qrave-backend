@@ -116,14 +116,44 @@ export async function updateCategory(restaurantId, categoryId, data) {
 }
 
 export async function deleteCategory(restaurantId, categoryId) {
-  const result = await pool.query(
-    `UPDATE menu_categories
-     SET is_active = false, updated_at = now()
-     WHERE restaurant_id = $1 AND id = $2
-     RETURNING id, name, is_active AS "isActive"`,
-    [restaurantId, categoryId],
-  );
-  return result.rows[0] || null;
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // First, delete all menu items in this category
+    const deletedItems = await client.query(
+      `DELETE FROM menu_items
+       WHERE restaurant_id = $1 AND category_id = $2
+       RETURNING id`,
+      [restaurantId, categoryId]
+    );
+    
+    // Then, soft delete the category
+    const result = await client.query(
+      `UPDATE menu_categories
+       SET is_active = false, updated_at = now()
+       WHERE restaurant_id = $1 AND id = $2
+       RETURNING id, name, is_active AS "isActive"`,
+      [restaurantId, categoryId]
+    );
+    
+    await client.query('COMMIT');
+    
+    const category = result.rows[0] || null;
+    
+    if (category) {
+      console.log(`[Menu] Deleted category ${categoryId} and ${deletedItems.rowCount} associated items`);
+    }
+    
+    return category;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('[Menu] Error deleting category:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createMenuItem(restaurantId, data) {

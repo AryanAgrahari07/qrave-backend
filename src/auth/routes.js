@@ -37,7 +37,7 @@ export function registerAuthRoutes(app) {
   // Dev-only registration endpoint (disable in prod via ALLOW_DEV_REGISTER=false)
   router.post(
     "/register",
-    rateLimit({ keyPrefix: "auth:register", windowSeconds: 60, max: 5 }),
+    // rateLimit({ keyPrefix: "auth:register", windowSeconds: 60, max: 5 }),
     asyncHandler(async (req, res) => {
       if (env.isProd && !env.allowDevRegister) {
         return res.status(403).json({ message: "Registration disabled" });
@@ -72,7 +72,7 @@ export function registerAuthRoutes(app) {
 
   router.post(
     "/login",
-    rateLimit({ keyPrefix: "auth:login", windowSeconds: 60, max: 10 }),
+    // rateLimit({ keyPrefix: "auth:login", windowSeconds: 60, max: 10 }),
     passport.authenticate("local", { session: true }),
     (req, res) => {
       const user = req.user;
@@ -90,8 +90,8 @@ export function registerAuthRoutes(app) {
     },
   );
 
-  // Staff login (waiter / kitchen / staff-admin) using email + passcode
- // Staff login (waiter / kitchen / staff-admin) using email + passcode
+// Staff login (waiter / kitchen / staff-admin) using email + passcode
+// Staff login (waiter / kitchen / staff-admin) using email + passcode
 router.post(
   "/staff/login",
   rateLimit({ keyPrefix: "auth:staff-login", windowSeconds: 60, max: 20 }),

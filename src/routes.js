@@ -12,6 +12,7 @@ import { registerTransactionRoutes } from "./transaction/routes.js";
 import { registerMetaRoutes } from "./meta/routes.js";
 import { registerAnalyticsRoutes } from "./analytics/routes.js";
 import { registerDashboardRoutes } from "./dashboard/routes.js";
+import { registerExtractionRoutes } from "./menu/extraction-routes.js";
 
 export async function registerRoutes(httpServer, app) {
   // API Routes
@@ -32,6 +33,7 @@ export async function registerRoutes(httpServer, app) {
   registerMetaRoutes(app);
   registerAnalyticsRoutes(app);
   registerDashboardRoutes(app);
+  registerExtractionRoutes(app);
 
   return httpServer;
 }

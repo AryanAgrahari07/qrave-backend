@@ -1,5 +1,5 @@
 CREATE TYPE "public"."guest_queue_status" AS ENUM('WAITING', 'CALLED', 'SEATED', 'CANCELLED');--> statement-breakpoint
-CREATE TYPE "public"."order_status" AS ENUM('PENDING', 'PREPARING', 'SERVED', 'PAID', 'CANCELLED');--> statement-breakpoint
+CREATE TYPE "public"."order_status" AS ENUM('PENDING', 'PREPARING', 'READY', 'SERVED', 'PAID', 'CANCELLED');--> statement-breakpoint
 CREATE TYPE "public"."order_type" AS ENUM('DINE_IN', 'TAKEAWAY', 'DELIVERY');--> statement-breakpoint
 CREATE TYPE "public"."payment_method" AS ENUM('CASH', 'UPI', 'CARD', 'WALLET', 'OTHER');--> statement-breakpoint
 CREATE TYPE "public"."staff_role" AS ENUM('ADMIN', 'WAITER', 'KITCHEN');--> statement-breakpoint
@@ -13,6 +13,26 @@ CREATE TABLE "analytics_events" (
 	"menu_item_id" varchar,
 	"metadata" jsonb,
 	"occurred_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "cities" (
+	"code" varchar(50) PRIMARY KEY NOT NULL,
+	"name" varchar(100) NOT NULL,
+	"state_code" varchar(10) NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "countries" (
+	"code" varchar(3) PRIMARY KEY NOT NULL,
+	"name" varchar(100) NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "currencies" (
+	"code" varchar(3) PRIMARY KEY NOT NULL,
+	"name" varchar(100) NOT NULL,
+	"symbol" varchar(10) NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
 CREATE TABLE "guest_queue" (
@@ -51,6 +71,31 @@ CREATE TABLE "menu_categories" (
 	"updated_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
+CREATE TABLE "menu_extraction_jobs" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"restaurant_id" varchar NOT NULL,
+	"uploaded_by" varchar,
+	"image_url" text NOT NULL,
+	"image_s3_key" text NOT NULL,
+	"image_size_bytes" integer,
+	"image_hash" varchar(64),
+	"status" varchar(50) DEFAULT 'PENDING' NOT NULL,
+	"extracted_data" jsonb,
+	"extraction_confidence" numeric(5, 2),
+	"ai_model_used" varchar(50),
+	"started_at" timestamp with time zone,
+	"completed_at" timestamp with time zone,
+	"confirmed_at" timestamp with time zone,
+	"processing_time_ms" integer,
+	"error_message" text,
+	"retry_count" integer DEFAULT 0,
+	"items_extracted" integer DEFAULT 0,
+	"items_confirmed" integer DEFAULT 0,
+	"manual_edits_count" integer DEFAULT 0,
+	"created_at" timestamp with time zone DEFAULT now(),
+	"updated_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
 CREATE TABLE "menu_items" (
 	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"restaurant_id" varchar NOT NULL,
@@ -64,7 +109,10 @@ CREATE TABLE "menu_items" (
 	"sort_order" integer,
 	"metadata" jsonb,
 	"created_at" timestamp with time zone DEFAULT now(),
-	"updated_at" timestamp with time zone DEFAULT now()
+	"updated_at" timestamp with time zone DEFAULT now(),
+	"extraction_job_id" varchar,
+	"is_ai_extracted" boolean DEFAULT false,
+	"extraction_confidence" numeric(5, 2)
 );
 --> statement-breakpoint
 CREATE TABLE "order_items" (
@@ -86,6 +134,7 @@ CREATE TABLE "orders" (
 	"table_id" varchar,
 	"guest_name" varchar(150),
 	"guest_phone" varchar(20),
+	"placed_by_staff_id" varchar,
 	"status" "order_status" DEFAULT 'PENDING' NOT NULL,
 	"order_type" "order_type" DEFAULT 'DINE_IN' NOT NULL,
 	"subtotal_amount" numeric(12, 2) DEFAULT '0' NOT NULL,
@@ -139,6 +188,13 @@ CREATE TABLE "staff" (
 	"updated_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
+CREATE TABLE "states" (
+	"code" varchar(10) PRIMARY KEY NOT NULL,
+	"name" varchar(100) NOT NULL,
+	"country_code" varchar(3) NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
 CREATE TABLE "tables" (
 	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"restaurant_id" varchar NOT NULL,
@@ -150,6 +206,7 @@ CREATE TABLE "tables" (
 	"position_y" numeric(10, 2),
 	"qr_code_payload" text NOT NULL,
 	"qr_code_version" integer DEFAULT 1 NOT NULL,
+	"assigned_waiter_id" varchar,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now(),
 	"updated_at" timestamp with time zone DEFAULT now()
@@ -186,62 +243,25 @@ ALTER TABLE "analytics_events" ADD CONSTRAINT "analytics_events_restaurant_id_re
 ALTER TABLE "analytics_events" ADD CONSTRAINT "analytics_events_table_id_tables_id_fk" FOREIGN KEY ("table_id") REFERENCES "public"."tables"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "analytics_events" ADD CONSTRAINT "analytics_events_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "analytics_events" ADD CONSTRAINT "analytics_events_menu_item_id_menu_items_id_fk" FOREIGN KEY ("menu_item_id") REFERENCES "public"."menu_items"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "cities" ADD CONSTRAINT "cities_state_code_states_code_fk" FOREIGN KEY ("state_code") REFERENCES "public"."states"("code") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "guest_queue" ADD CONSTRAINT "guest_queue_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "inventory_items" ADD CONSTRAINT "inventory_items_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "menu_categories" ADD CONSTRAINT "menu_categories_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "menu_extraction_jobs" ADD CONSTRAINT "menu_extraction_jobs_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "menu_extraction_jobs" ADD CONSTRAINT "menu_extraction_jobs_uploaded_by_users_id_fk" FOREIGN KEY ("uploaded_by") REFERENCES "public"."users"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "menu_items" ADD CONSTRAINT "menu_items_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "menu_items" ADD CONSTRAINT "menu_items_category_id_menu_categories_id_fk" FOREIGN KEY ("category_id") REFERENCES "public"."menu_categories"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "menu_items" ADD CONSTRAINT "menu_items_extraction_job_id_menu_extraction_jobs_id_fk" FOREIGN KEY ("extraction_job_id") REFERENCES "public"."menu_extraction_jobs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_items" ADD CONSTRAINT "order_items_menu_item_id_menu_items_id_fk" FOREIGN KEY ("menu_item_id") REFERENCES "public"."menu_items"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_table_id_tables_id_fk" FOREIGN KEY ("table_id") REFERENCES "public"."tables"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orders" ADD CONSTRAINT "orders_placed_by_staff_id_staff_id_fk" FOREIGN KEY ("placed_by_staff_id") REFERENCES "public"."staff"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "restaurants" ADD CONSTRAINT "restaurants_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "staff" ADD CONSTRAINT "staff_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "states" ADD CONSTRAINT "states_country_code_countries_code_fk" FOREIGN KEY ("country_code") REFERENCES "public"."countries"("code") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "tables" ADD CONSTRAINT "tables_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "tables" ADD CONSTRAINT "tables_assigned_waiter_id_staff_id_fk" FOREIGN KEY ("assigned_waiter_id") REFERENCES "public"."staff"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE cascade ON UPDATE no action;
-
-
-
-
--- Unique constraints
-ALTER TABLE tables
-  ADD CONSTRAINT uq_tables_restaurant_table_number UNIQUE (restaurant_id, table_number);
-
-ALTER TABLE transactions
-  ADD CONSTRAINT uq_transactions_restaurant_bill_number UNIQUE (restaurant_id, bill_number);
-
--- Indexes (multi-tenant + common filters)
-CREATE INDEX IF NOT EXISTS idx_menu_categories_restaurant_sort
-  ON menu_categories (restaurant_id, sort_order);
-
-CREATE INDEX IF NOT EXISTS idx_menu_items_restaurant_category_available
-  ON menu_items (restaurant_id, category_id, is_available);
-
-CREATE INDEX IF NOT EXISTS idx_tables_restaurant_status
-  ON tables (restaurant_id, current_status);
-
-CREATE INDEX IF NOT EXISTS idx_orders_restaurant_status
-  ON orders (restaurant_id, status);
-
-CREATE INDEX IF NOT EXISTS idx_orders_restaurant_created_at
-  ON orders (restaurant_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_orders_table_created_at
-  ON orders (table_id, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_order_items_order_id
-  ON order_items (order_id);
-
-CREATE INDEX IF NOT EXISTS idx_guest_queue_restaurant_status_entry
-  ON guest_queue (restaurant_id, status, entry_time DESC);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_restaurant_paid_at
-  ON transactions (restaurant_id, paid_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_analytics_events_restaurant_time
-  ON analytics_events (restaurant_id, occurred_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_analytics_events_type_time
-  ON analytics_events (event_type, occurred_at DESC);

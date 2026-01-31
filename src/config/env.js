@@ -25,6 +25,9 @@ export const env = {
   allowDevRegister: String(process.env.ALLOW_DEV_REGISTER || "true").toLowerCase() === "true",
   redisMode: (process.env.REDIS_MODE || "single").toLowerCase(),
   redisUrl: process.env.REDIS_URL,
+
+  geminiApiKey: process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY,
+  
   // S3 / object storage
   s3Bucket: process.env.AWS_S3_BUCKET,
   s3Region: process.env.AWS_REGION,

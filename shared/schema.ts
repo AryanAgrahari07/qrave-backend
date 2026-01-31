@@ -7,7 +7,6 @@ import {
   timestamp,
   jsonb,
   numeric,
-  uuid,
   integer,
   pgEnum,
 } from "drizzle-orm/pg-core";
@@ -128,6 +127,40 @@ export const menuCategories = pgTable("menu_categories", {
 });
 
 //
+// Menu extraction jobs - MOVED BEFORE menuItems
+//
+export const menuExtractionJobs = pgTable("menu_extraction_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  uploadedBy: varchar("uploaded_by").references(() => users.id),
+  
+  imageUrl: text("image_url").notNull(),
+  imageS3Key: text("image_s3_key").notNull(),
+  imageSizeBytes: integer("image_size_bytes"),
+  imageHash: varchar("image_hash", { length: 64 }),
+  
+  status: varchar("status", { length: 50 }).notNull().default("PENDING"),
+  
+  extractedData: jsonb("extracted_data"),
+  extractionConfidence: numeric("extraction_confidence", { precision: 5, scale: 2 }),
+  aiModelUsed: varchar("ai_model_used", { length: 50 }),
+  
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+  confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+  processingTimeMs: integer("processing_time_ms"),
+  errorMessage: text("error_message"),
+  retryCount: integer("retry_count").default(0),
+  
+  itemsExtracted: integer("items_extracted").default(0),
+  itemsConfirmed: integer("items_confirmed").default(0),
+  manualEditsCount: integer("manual_edits_count").default(0),
+  
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
 // Menu items
 //
 export const menuItems = pgTable("menu_items", {
@@ -148,6 +181,30 @@ export const menuItems = pgTable("menu_items", {
   dietaryTags: varchar("dietary_tags", { length: 50 }).array(), // Veg, Non-Veg, Vegan, etc.
   sortOrder: integer("sort_order"),
   metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  extractionJobId: varchar("extraction_job_id").references(() => menuExtractionJobs.id, { onDelete: "set null" }),
+  isAiExtracted: boolean("is_ai_extracted").default(false),
+  extractionConfidence: numeric("extraction_confidence", { precision: 5, scale: 2 }),
+});
+
+//
+// Staff & roles - MOVED BEFORE tables (since tables references staff)
+//
+export const staff = pgTable("staff", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id")
+    .notNull()
+    .references(() => restaurants.id, { onDelete: "cascade" }),
+  fullName: varchar("full_name", { length: 150 }).notNull(),
+  phoneNumber: varchar("phone_number", { length: 20 }),
+  email: varchar("email", { length: 255 }),
+  role: staffRoleEnum("role").notNull(),
+  passcodeHash: text("passcode_hash").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
@@ -291,27 +348,6 @@ export const inventoryItems = pgTable("inventory_items", {
 });
 
 //
-// Staff & roles
-//
-export const staff = pgTable("staff", {
-  id: varchar("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  restaurantId: varchar("restaurant_id")
-    .notNull()
-    .references(() => restaurants.id, { onDelete: "cascade" }),
-  fullName: varchar("full_name", { length: 150 }).notNull(),
-  phoneNumber: varchar("phone_number", { length: 20 }),
-  email: varchar("email", { length: 255 }),
-  role: staffRoleEnum("role").notNull(),
-  passcodeHash: text("passcode_hash").notNull(),
-  isActive: boolean("is_active").notNull().default(true),
-  lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
-  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
-});
-
-//
 // Guest queue / waitlist
 //
 export const guestQueue = pgTable("guest_queue", {
@@ -403,6 +439,7 @@ export type User = typeof users.$inferSelect;
 
 export type Restaurant = typeof restaurants.$inferSelect;
 export type MenuCategory = typeof menuCategories.$inferSelect;
+export type MenuExtractionJob = typeof menuExtractionJobs.$inferSelect;
 export type MenuItem = typeof menuItems.$inferSelect;
 export type Table = typeof tables.$inferSelect;
 export type Order = typeof orders.$inferSelect;
@@ -412,5 +449,3 @@ export type InventoryItem = typeof inventoryItems.$inferSelect;
 export type Staff = typeof staff.$inferSelect;
 export type GuestQueue = typeof guestQueue.$inferSelect;
 export type AnalyticsEvent = typeof analyticsEvents.$inferSelect;
-
-
