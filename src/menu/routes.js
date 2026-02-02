@@ -21,6 +21,7 @@ import { createPresignedUploadUrl, publicFileUrl } from "../media/s3.js";
 import { v4 as uuidv4 } from "uuid";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { createPgPool } from "../db.js";
+import { getMenuForRestaurantWithCustomizations } from "../customization/service.js";
 
 const router = express.Router();
 const pool = createPgPool(env.databaseUrl);
@@ -91,7 +92,7 @@ export function registerMenuRoutes(app) {
           throw err;
         }
 
-        const menu = await getMenuForRestaurant(restaurant.id, dietaryFilter);
+        const menu = await getMenuForRestaurantWithCustomizations(restaurant.id, dietaryFilter);
         return {
           restaurant,
           ...menu,

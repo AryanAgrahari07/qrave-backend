@@ -1,6 +1,15 @@
-import { eq, and, desc, sql, gte, lte } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { orders, orderItems, menuItems, tables, restaurants } from "../../shared/schema.js";
+import { 
+  orders, 
+  orderItems, 
+  menuItems, 
+  tables, 
+  restaurants,
+  menuItemVariants,
+  modifiers,
+  modifierGroups
+} from "../../shared/schema.js";
 import { createPgPool } from "../db.js";
 import {
   emitOrderCreated,
@@ -14,9 +23,124 @@ const pool = createPgPool();
 const db = drizzle(pool);
 
 /**
- * Create a new order with items
+ * Process order items with customization data
+ * Fetches variant and modifier details, calculates prices including customizations
+ * @private
+ */
+async function processOrderItemsWithCustomization(restaurantId, items) {
+  const processedItems = [];
+  let subtotal = 0;
+
+  for (const item of items) {
+    // Fetch base menu item
+    const menuItemRows = await db
+      .select()
+      .from(menuItems)
+      .where(
+        and(
+          eq(menuItems.id, item.menuItemId),
+          eq(menuItems.restaurantId, restaurantId)
+        )
+      )
+      .limit(1);
+
+    const menuItem = menuItemRows[0];
+    if (!menuItem) {
+      throw new Error(`Menu item ${item.menuItemId} not found`);
+    }
+
+    let basePrice = parseFloat(menuItem.price);
+    let variantData = null;
+    let modifiersData = [];
+    let customizationAmount = 0;
+
+    // Handle variant selection (size/portion)
+    if (item.variantId) {
+      const variantRows = await db
+        .select()
+        .from(menuItemVariants)
+        .where(
+          and(
+            eq(menuItemVariants.id, item.variantId),
+            eq(menuItemVariants.menuItemId, item.menuItemId),
+            eq(menuItemVariants.restaurantId, restaurantId)
+          )
+        )
+        .limit(1);
+
+      if (variantRows[0]) {
+        const variant = variantRows[0];
+        variantData = {
+          id: variant.id,
+          name: variant.variantName,
+          price: parseFloat(variant.price),
+        };
+        // Variant price REPLACES base price (not adds to it)
+        basePrice = variantData.price;
+      }
+    }
+
+    // Handle modifier selections (add-ons/toppings)
+    if (item.modifierIds && item.modifierIds.length > 0) {
+      const modifierRows = await db
+        .select({
+          id: modifiers.id,
+          name: modifiers.name,
+          price: modifiers.price,
+          groupId: modifiers.modifierGroupId,
+          groupName: modifierGroups.name,
+        })
+        .from(modifiers)
+        .innerJoin(modifierGroups, eq(modifiers.modifierGroupId, modifierGroups.id))
+        .where(
+          and(
+            inArray(modifiers.id, item.modifierIds),
+            eq(modifiers.restaurantId, restaurantId)
+          )
+        );
+
+      for (const mod of modifierRows) {
+        const modPrice = parseFloat(mod.price);
+        modifiersData.push({
+          id: mod.id,
+          name: mod.name,
+          price: modPrice,
+          groupId: mod.groupId,
+          groupName: mod.groupName,
+        });
+        customizationAmount += modPrice;
+      }
+    }
+
+    // Calculate item total: (base/variant price + modifiers) * quantity
+    const itemTotal = (basePrice + customizationAmount) * item.quantity;
+    subtotal += itemTotal;
+
+    processedItems.push({
+      menuItemId: item.menuItemId,
+      itemName: menuItem.name,
+      unitPrice: basePrice.toFixed(2),
+      quantity: item.quantity,
+      totalPrice: itemTotal.toFixed(2),
+      notes: item.notes || null,
+      
+      // Customization data (snapshot at order time)
+      selectedVariantId: variantData?.id || null,
+      variantName: variantData?.name || null,
+      variantPrice: variantData?.price?.toFixed(2) || null,
+      selectedModifiers: modifiersData,
+      customizationAmount: customizationAmount.toFixed(2),
+    });
+  }
+
+  return { processedItems, subtotal };
+}
+
+/**
+ * Create a new order with items (with customization support)
  * @param {string} restaurantId - Restaurant ID
  * @param {object} data - Order data
+ * @param {string|null} placedByStaffId - Staff ID who placed the order
  * @returns {Promise<object>} Created order with items
  */
 export async function createOrder(restaurantId, data, placedByStaffId = null) {
@@ -67,40 +191,11 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     }
   }
 
-  // Calculate order totals
-  let subtotal = 0;
-  const itemsWithPrice = [];
-
-  // Fetch menu item prices
-  for (const item of items) {
-    const menuItemRows = await db
-      .select()
-      .from(menuItems)
-      .where(
-        and(
-          eq(menuItems.id, item.menuItemId),
-          eq(menuItems.restaurantId, restaurantId)
-        )
-      )
-      .limit(1);
-
-    const menuItem = menuItemRows[0];
-    if (!menuItem) {
-      throw new Error(`Menu item ${item.menuItemId} not found`);
-    }
-
-    const itemTotal = parseFloat(menuItem.price) * item.quantity;
-    subtotal += itemTotal;
-
-    itemsWithPrice.push({
-      menuItemId: item.menuItemId,
-      itemName: menuItem.name,
-      unitPrice: menuItem.price,
-      quantity: item.quantity,
-      totalPrice: itemTotal.toFixed(2),
-      notes: item.notes || null,
-    });
-  }
+  // Process items with customization
+  const { processedItems, subtotal } = await processOrderItemsWithCustomization(
+    restaurantId,
+    items
+  );
 
   // Get restaurant tax rates
   const restaurantRows = await db
@@ -119,6 +214,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
   
   console.log("-----");
   console.log("✅ Order placed by staff ID:", placedByStaffId);
+  
   // Create order
   const orderRows = await db
     .insert(orders)
@@ -140,14 +236,24 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     .returning();
 
   const order = orderRows[0];
-
   console.log(order);
 
-  // Create order items
-  const orderItemsData = itemsWithPrice.map((item) => ({
+  // Create order items with customization data
+  const orderItemsData = processedItems.map((item) => ({
     restaurantId,
     orderId: order.id,
-    ...item,
+    menuItemId: item.menuItemId,
+    itemName: item.itemName,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    totalPrice: item.totalPrice,
+    notes: item.notes,
+    // Customization fields
+    selectedVariantId: item.selectedVariantId,
+    variantName: item.variantName,
+    variantPrice: item.variantPrice,
+    selectedModifiers: sql`${JSON.stringify(item.selectedModifiers)}::jsonb`,
+    customizationAmount: item.customizationAmount,
   }));
 
   const createdItems = await db
@@ -182,15 +288,13 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
   }
 
   emitOrderCreated(restaurantId, result);
-
-
   console.log(result);
 
   return result;
 }
 
 /**
- * Get order by ID with items
+ * Get order by ID with items (including customization data)
  * @param {string} restaurantId - Restaurant ID
  * @param {string} orderId - Order ID
  * @returns {Promise<object|null>} Order with items
@@ -210,11 +314,17 @@ export async function getOrder(restaurantId, orderId) {
   const order = orderRows[0];
   if (!order) return null;
 
-  // Get order items
+  // Get order items with customization data
   const items = await db
     .select()
     .from(orderItems)
     .where(eq(orderItems.orderId, orderId));
+
+  // Parse selectedModifiers JSONB field for each item
+  const parsedItems = items.map(item => ({
+    ...item,
+    selectedModifiers: item.selectedModifiers || [],
+  }));
 
   // Get staff info if available
   let staffInfo = null;
@@ -234,13 +344,13 @@ export async function getOrder(restaurantId, orderId) {
 
   return {
     ...order,
-    items,
+    items: parsedItems,
     placedByStaff: staffInfo,
   };
 }
 
 /**
- * List orders with filters
+ * List orders with filters (including customization data in items)
  * @param {string} restaurantId - Restaurant ID
  * @param {object} filters - Filter options
  * @returns {Promise<Array>} List of orders with items and table info
@@ -301,6 +411,12 @@ export async function listOrders(restaurantId, filters = {}) {
         .from(orderItems)
         .where(eq(orderItems.orderId, order.id));
 
+      // Parse selectedModifiers JSONB for each item
+      const parsedItems = items.map(item => ({
+        ...item,
+        selectedModifiers: item.selectedModifiers || [],
+      }));
+
       // Get table info if available
       let tableInfo = null;
       if (order.tableId) {
@@ -334,7 +450,7 @@ export async function listOrders(restaurantId, filters = {}) {
 
       return {
         ...order,
-        items,
+        items: parsedItems,
         table: tableInfo,
         placedByStaff: staffInfo,
       };
@@ -420,7 +536,7 @@ export async function cancelOrder(restaurantId, orderId) {
 }
 
 /**
- * Get active orders for kitchen (PENDING, PREPARING, READY)
+ * Get active orders for kitchen (PENDING, PREPARING, READY) with customization
  * @param {string} restaurantId - Restaurant ID
  * @returns {Promise<Array>} Active orders with items
  */
@@ -443,6 +559,12 @@ export async function getKitchenOrders(restaurantId) {
         .select()
         .from(orderItems)
         .where(eq(orderItems.orderId, order.id));
+
+      // Parse selectedModifiers JSONB for each item
+      const parsedItems = items.map(item => ({
+        ...item,
+        selectedModifiers: item.selectedModifiers || [],
+      }));
 
       // Get table info if available
       let tableInfo = null;
@@ -477,7 +599,7 @@ export async function getKitchenOrders(restaurantId) {
 
       return {
         ...order,
-        items,
+        items: parsedItems,
         table: tableInfo,
         placedByStaff: staffInfo,
       };
@@ -577,10 +699,10 @@ export async function getOrderStats(restaurantId, options = {}) {
 }
 
 /**
- * Add items to existing order
+ * Add items to existing order (with customization support)
  * @param {string} restaurantId - Restaurant ID
  * @param {string} orderId - Order ID
- * @param {Array} items - Items to add
+ * @param {Array} items - Items to add (may include variantId and modifierIds)
  * @returns {Promise<object>} Updated order with new items
  */
 export async function addOrderItems(restaurantId, orderId, items) {
@@ -590,46 +712,33 @@ export async function addOrderItems(restaurantId, orderId, items) {
     throw new Error("Order not found");
   }
 
-  // Fetch menu item prices and create items
-  const itemsWithPrice = [];
-  let additionalTotal = 0;
+  // Process new items with customization
+  const { processedItems, subtotal: additionalTotal } = await processOrderItemsWithCustomization(
+    restaurantId,
+    items
+  );
 
-  for (const item of items) {
-    const menuItemRows = await db
-      .select()
-      .from(menuItems)
-      .where(
-        and(
-          eq(menuItems.id, item.menuItemId),
-          eq(menuItems.restaurantId, restaurantId)
-        )
-      )
-      .limit(1);
+  // Insert new items with customization data
+  const orderItemsData = processedItems.map((item) => ({
+    restaurantId,
+    orderId,
+    menuItemId: item.menuItemId,
+    itemName: item.itemName,
+    unitPrice: item.unitPrice,
+    quantity: item.quantity,
+    totalPrice: item.totalPrice,
+    notes: item.notes,
+    // Customization fields
+    selectedVariantId: item.selectedVariantId,
+    variantName: item.variantName,
+    variantPrice: item.variantPrice,
+    selectedModifiers: sql`${JSON.stringify(item.selectedModifiers)}::jsonb`,
+    customizationAmount: item.customizationAmount,
+  }));
 
-    const menuItem = menuItemRows[0];
-    if (!menuItem) {
-      throw new Error(`Menu item ${item.menuItemId} not found`);
-    }
-
-    const itemTotal = parseFloat(menuItem.price) * item.quantity;
-    additionalTotal += itemTotal;
-
-    itemsWithPrice.push({
-      restaurantId,
-      orderId,
-      menuItemId: item.menuItemId,
-      itemName: menuItem.name,
-      unitPrice: menuItem.price,
-      quantity: item.quantity,
-      totalPrice: itemTotal.toFixed(2),
-      notes: item.notes || null,
-    });
-  }
-
-  // Add items to order
   const newItems = await db
     .insert(orderItems)
-    .values(itemsWithPrice)
+    .values(orderItemsData)
     .returning();
 
   // Recalculate order totals

@@ -9,6 +9,7 @@ import {
   numeric,
   integer,
   pgEnum,
+  unique,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -54,6 +55,8 @@ export const guestQueueStatusEnum = pgEnum("guest_queue_status", [
   "SEATED",
   "CANCELLED",
 ]);
+
+export const selectionTypeEnum = pgEnum("selection_type", ["SINGLE", "MULTIPLE"]);
 
 //
 // Platform users (SaaS owners / platform admins)
@@ -292,6 +295,11 @@ export const orderItems = pgTable("order_items", {
   totalPrice: numeric("total_price", { precision: 12, scale: 2 }).notNull(),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  selectedVariantId: varchar("selected_variant_id").references(() => menuItemVariants.id),
+  variantName: varchar("variant_name", { length: 100 }),
+  variantPrice: numeric("variant_price", { precision: 10, scale: 2 }),
+  selectedModifiers: jsonb("selected_modifiers").default(sql`'[]'::jsonb`),
+  customizationAmount: numeric("customization_amount", { precision: 10, scale: 2 }).default("0"),
 });
 
 //
@@ -427,6 +435,127 @@ export const currencies = pgTable("currencies", {
   symbol: varchar("symbol", { length: 10 }).notNull(), // Currency symbol (e.g., '₹', '$')
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
+
+
+
+//
+// Menu Item Variants (Size/Portion variants)
+// UPDATED: Changed from priceAdjustment to total price
+//
+export const menuItemVariants = pgTable("menu_item_variants", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id")
+    .notNull()
+    .references(() => restaurants.id, { onDelete: "cascade" }),
+  menuItemId: varchar("menu_item_id")
+    .notNull()
+    .references(() => menuItems.id, { onDelete: "cascade" }),
+  
+  variantName: varchar("variant_name", { length: 100 }).notNull(),
+  price: numeric("price", { precision: 10, scale: 2 })
+    .notNull()
+    .default("0"), // Total price for this variant (not adjustment)
+  isDefault: boolean("is_default").notNull().default(false),
+  isAvailable: boolean("is_available").notNull().default(true),
+  sortOrder: integer("sort_order"),
+  
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
+// Modifier Groups (Grouping for customizations)
+//
+export const modifierGroups = pgTable("modifier_groups", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id")
+    .notNull()
+    .references(() => restaurants.id, { onDelete: "cascade" }),
+  
+  name: varchar("name", { length: 150 }).notNull(),
+  description: text("description"),
+  selectionType: varchar("selection_type", { length: 20 })
+    .notNull()
+    .default("MULTIPLE"), // 'SINGLE' or 'MULTIPLE'
+  minSelections: integer("min_selections").default(0),
+  maxSelections: integer("max_selections"), // NULL = unlimited
+  isRequired: boolean("is_required").notNull().default(false),
+  sortOrder: integer("sort_order"),
+  isActive: boolean("is_active").notNull().default(true),
+  
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
+// Modifiers (Individual customization options)
+//
+export const modifiers = pgTable("modifiers", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id")
+    .notNull()
+    .references(() => restaurants.id, { onDelete: "cascade" }),
+  modifierGroupId: varchar("modifier_group_id")
+    .notNull()
+    .references(() => modifierGroups.id, { onDelete: "cascade" }),
+  
+  name: varchar("name", { length: 150 }).notNull(),
+  price: numeric("price", { precision: 10, scale: 2 }).notNull().default("0"),
+  isDefault: boolean("is_default").notNull().default(false),
+  isAvailable: boolean("is_available").notNull().default(true),
+  sortOrder: integer("sort_order"),
+  
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
+// Menu Item Modifier Groups (Junction table)
+//
+export const menuItemModifierGroups = pgTable(
+  "menu_item_modifier_groups", 
+  {
+    id: varchar("id")
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    menuItemId: varchar("menu_item_id")
+      .notNull()
+      .references(() => menuItems.id, { onDelete: "cascade" }),
+    modifierGroupId: varchar("modifier_group_id")
+      .notNull()
+      .references(() => modifierGroups.id, { onDelete: "cascade" }),
+    sortOrder: integer("sort_order"),
+    
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    // Unique constraint: a modifier group can only be linked once to a menu item
+    menuItemModifierGroupUnique: unique("menu_item_modifier_group_unique").on(
+      table.menuItemId,
+      table.modifierGroupId
+    ),
+  })
+);
+
+// Type exports
+export type MenuItemVariant = typeof menuItemVariants.$inferSelect;
+export type ModifierGroup = typeof modifierGroups.$inferSelect;
+export type Modifier = typeof modifiers.$inferSelect;
+export type MenuItemModifierGroup = typeof menuItemModifierGroups.$inferSelect;
+
+// Insert schemas
+export type InsertMenuItemVariant = typeof menuItemVariants.$inferInsert;
+export type InsertModifierGroup = typeof modifierGroups.$inferInsert;
+export type InsertModifier = typeof modifiers.$inferInsert;
+export type InsertMenuItemModifierGroup = typeof menuItemModifierGroups.$inferInsert;
+
+
 
 // Type exports
 export type Country = typeof countries.$inferSelect;

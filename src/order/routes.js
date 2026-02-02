@@ -24,6 +24,8 @@ const orderItemSchema = z.object({
   menuItemId: z.string().uuid(),
   quantity: z.number().int().positive(),
   notes: z.string().optional(),
+  variantId: z.string().uuid().optional(),
+  modifierIds: z.array(z.string().uuid()).optional(),
 });
 
 const createOrderSchema = z.object({
