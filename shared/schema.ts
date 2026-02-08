@@ -181,6 +181,7 @@ export const menuItems = pgTable("menu_items", {
   price: numeric("price", { precision: 10, scale: 2 }).notNull(),
   imageUrl: text("image_url"),
   isAvailable: boolean("is_available").notNull().default(true),
+  isActive: boolean("is_active").notNull().default(true), 
   dietaryTags: varchar("dietary_tags", { length: 50 }).array(), // Veg, Non-Veg, Vegan, etc.
   sortOrder: integer("sort_order"),
   metadata: jsonb("metadata"),

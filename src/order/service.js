@@ -350,10 +350,10 @@ export async function getOrder(restaurantId, orderId) {
 }
 
 /**
- * List orders with filters (including customization data in items)
+ * List orders with filters and pagination (including customization data in items)
  * @param {string} restaurantId - Restaurant ID
  * @param {object} filters - Filter options
- * @returns {Promise<Array>} List of orders with items and table info
+ * @returns {Promise<object>} Object with orders array and total count
  */
 export async function listOrders(restaurantId, filters = {}) {
   const {
@@ -395,6 +395,15 @@ export async function listOrders(restaurantId, filters = {}) {
     conditions.push(eq(orders.placedByStaffId, placedByStaffId));
   }
 
+  // Get total count for pagination
+  const countResult = await db
+    .select({ count: sql`count(*)` })
+    .from(orders)
+    .where(and(...conditions));
+
+  const total = parseInt(countResult[0]?.count || 0);
+
+  // Get paginated orders
   const ordersList = await db
     .select()
     .from(orders)
@@ -457,7 +466,10 @@ export async function listOrders(restaurantId, filters = {}) {
     })
   );
 
-  return ordersWithDetails;
+  return {
+    orders: ordersWithDetails,
+    total,
+  };
 }
 
 /**

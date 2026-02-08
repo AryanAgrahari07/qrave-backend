@@ -189,6 +189,7 @@ export const menuItems = pgTable("menu_items", {
   price: numeric("price", { precision: 10, scale: 2 }).notNull(),
 
   imageUrl: text("image_url"),
+  isActive: boolean("is_active").notNull().default(true),
   isAvailable: boolean("is_available").notNull().default(true),
   dietaryTags: varchar("dietary_tags", { length: 50 }).array(),
   sortOrder: integer("sort_order"),

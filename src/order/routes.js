@@ -143,7 +143,7 @@ export function registerOrderRoutes(app) {
     })
   );
 
-  // List orders with filters
+  // List orders with filters and pagination
   router.get(
     "/",
     requireRole("owner", "admin", "platform_admin", "WAITER", "KITCHEN"),
@@ -166,11 +166,40 @@ export function registerOrderRoutes(app) {
         filters.excludePaid = true; // Always exclude PAID orders for waiters
       } else if (req.user?.role === "WAITER") {
         // If waiter doesn't have staffId, they shouldn't see any orders
-        return res.json({ orders: [] });
+        return res.json({ 
+          orders: [],
+          pagination: {
+            total: 0,
+            limit: parsed.data.limit,
+            offset: parsed.data.offset,
+            hasMore: false,
+            totalPages: 0,
+            currentPage: 1,
+          }
+        });
       }
 
-      const orders = await listOrders(restaurantId, filters);
-      res.json({ orders });
+      const result = await listOrders(restaurantId, filters);
+      
+      // Calculate pagination metadata
+      const total = result.total || 0;
+      const limit = parsed.data.limit;
+      const offset = parsed.data.offset;
+      const hasMore = offset + limit < total;
+      const totalPages = Math.ceil(total / limit);
+      const currentPage = Math.floor(offset / limit) + 1;
+
+      res.json({
+        orders: result.orders,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore,
+          totalPages,
+          currentPage,
+        },
+      });
     })
   );
 

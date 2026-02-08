@@ -397,7 +397,7 @@ export async function getMenuForRestaurantWithCustomizations(
             dietary_tags AS "dietaryTags",
             sort_order AS "sortOrder"
      FROM menu_items
-     WHERE restaurant_id = $1
+     WHERE restaurant_id = $1 AND is_active = true
   `;
   
   const queryParams = [restaurantId];

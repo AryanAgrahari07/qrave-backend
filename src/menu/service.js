@@ -34,7 +34,7 @@ export async function getMenuForRestaurant(restaurantId, dietaryFilter = null) {
             dietary_tags AS "dietaryTags",
             sort_order AS "sortOrder"
      FROM menu_items
-     WHERE restaurant_id = $1
+     WHERE restaurant_id = $1 AND is_active = true
   `;
   
   const queryParams = [restaurantId];
@@ -121,15 +121,15 @@ export async function deleteCategory(restaurantId, categoryId) {
   try {
     await client.query('BEGIN');
     
-    // First, delete all menu items in this category
-    const deletedItems = await client.query(
-      `DELETE FROM menu_items
-       WHERE restaurant_id = $1 AND category_id = $2
-       RETURNING id`,
+    // Soft delete all menu items in this category
+    await client.query(
+      `UPDATE menu_items
+       SET is_active = false, updated_at = now()
+       WHERE restaurant_id = $1 AND category_id = $2`,
       [restaurantId, categoryId]
     );
     
-    // Then, soft delete the category
+    // Soft delete the category
     const result = await client.query(
       `UPDATE menu_categories
        SET is_active = false, updated_at = now()
@@ -143,7 +143,7 @@ export async function deleteCategory(restaurantId, categoryId) {
     const category = result.rows[0] || null;
     
     if (category) {
-      console.log(`[Menu] Deleted category ${categoryId} and ${deletedItems.rowCount} associated items`);
+      console.log(`[Menu] Deleted category ${categoryId} and associated items`);
     }
     
     return category;
@@ -234,10 +234,12 @@ export async function updateMenuItem(restaurantId, itemId, data) {
 }
 
 export async function deleteMenuItem(restaurantId, itemId) {
+  // Soft delete instead of hard delete
   const result = await pool.query(
-    `DELETE FROM menu_items
+    `UPDATE menu_items
+     SET is_active = false, updated_at = now()
      WHERE restaurant_id = $1 AND id = $2
-     RETURNING id`,
+     RETURNING id, is_active AS "isActive"`,
     [restaurantId, itemId],
   );
   return result.rows[0] || null;
