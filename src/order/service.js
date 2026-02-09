@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, lte, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, gte, lte, inArray, not, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { 
   orders, 
@@ -8,7 +8,8 @@ import {
   restaurants,
   menuItemVariants,
   modifiers,
-  modifierGroups
+  modifierGroups,
+  transactions
 } from "../../shared/schema.js";
 import { createPgPool } from "../db.js";
 import {
@@ -136,12 +137,184 @@ async function processOrderItemsWithCustomization(restaurantId, items) {
   return { processedItems, subtotal };
 }
 
+
 /**
- * Create a new order with items (with customization support)
+ * ✅ FIX #1: Update payment status without creating duplicate transactions
+ * Creates transaction ONLY if none exists for this order
+ * Updates existing transaction if order was partially paid
+ */
+export async function updatePaymentStatus(restaurantId, orderId, paymentStatus, paymentMethod = null) {
+  // Get current order to calculate paid amount
+  const order = await getOrder(restaurantId, orderId);
+  if (!order) {
+    throw new Error("Order not found");
+  }
+
+  const currentPaidAmount = parseFloat(order.paid_amount || "0");
+  const totalAmount = parseFloat(order.totalAmount);
+  const outstandingAmount = totalAmount - currentPaidAmount;
+
+  const updateData = {
+    paymentStatus,
+    updatedAt: new Date(),
+  };
+
+  // If marking as PAID, update paid amount and close order
+  if (paymentStatus === "PAID") {
+    // Add the outstanding amount to paid amount
+    updateData.paid_amount = totalAmount.toFixed(2);  // ✅ This correctly sets to total
+    updateData.closedAt = new Date();
+    
+    console.log("💳 Marking order as PAID");
+    console.log("Previous paid amount:", currentPaidAmount.toFixed(2));
+    console.log("Outstanding amount paid:", outstandingAmount.toFixed(2));
+    console.log("Total paid amount:", totalAmount.toFixed(2));
+  }
+
+  const rows = await db
+    .update(orders)
+    .set(updateData)
+    .where(
+      and(
+        eq(orders.restaurantId, restaurantId),
+        eq(orders.id, orderId)
+      )
+    )
+    .returning();
+
+  const updated = rows[0] || null;
+  if (updated) {
+    emitOrderStatusChanged(restaurantId, updated);
+    
+    // ✅ FIX: Only create transaction if marking as PAID AND no transaction exists
+    if (paymentStatus === "PAID" && paymentMethod) {
+      // Check if transaction already exists for this order
+      const existingTransactionRows = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.orderId, orderId))
+        .limit(1);
+
+      const existingTransaction = existingTransactionRows[0];
+
+      if (existingTransaction) {
+        // ✅ UPDATE existing transaction instead of creating new one
+        console.log("💳 Transaction already exists, updating it...");
+        
+        await db
+          .update(transactions)
+          .set({
+            paymentMethod: paymentMethod.toUpperCase(),
+            grandTotal: updated.totalAmount,
+            subtotal: updated.subtotalAmount,
+            gstAmount: updated.gstAmount,
+            serviceTaxAmount: updated.serviceTaxAmount,
+            discountAmount: updated.discountAmount || "0",
+            paidAt: new Date(), // Update payment time
+          })
+          .where(eq(transactions.id, existingTransaction.id));
+
+        console.log("✅ Transaction updated:", existingTransaction.id);
+      } else {
+        // ✅ CREATE new transaction only if none exists
+        const billNumber = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+        
+        const { createTransaction } = await import("../transaction/service.js");
+        
+        try {
+          await createTransaction(
+            restaurantId,
+            updated.id,
+            {
+              billNumber,
+              paymentMethod: paymentMethod.toUpperCase(),
+              combinedSubtotal: parseFloat(updated.subtotalAmount),
+              combinedGst: parseFloat(updated.gstAmount),
+              combinedService: parseFloat(updated.serviceTaxAmount),
+              combinedTotal: parseFloat(updated.totalAmount),
+            }
+          );
+
+          console.log("✅ New transaction created");
+        } catch (err) {
+          console.error("Failed to create transaction:", err);
+        }
+      }
+    }
+  }
+  
+  return updated;
+}
+
+
+
+/**
+ * Cancel order with reason
  * @param {string} restaurantId - Restaurant ID
- * @param {object} data - Order data
- * @param {string|null} placedByStaffId - Staff ID who placed the order
- * @returns {Promise<object>} Created order with items
+ * @param {string} orderId - Order ID
+ * @param {string} cancelReason - Reason for cancellation
+ * @returns {Promise<object|null>} Cancelled order
+ */
+export async function cancelOrderWithReason(restaurantId, orderId, cancelReason) {
+  if (!cancelReason || cancelReason.trim().length === 0) {
+    throw new Error("Cancel reason is required");
+  }
+
+  const rows = await db
+    .update(orders)
+    .set({
+      status: "CANCELLED",
+      paymentStatus: "DUE", // Reset payment status on cancel
+      cancelReason: cancelReason.trim(),
+      updatedAt: new Date(),
+      closedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(orders.restaurantId, restaurantId),
+        eq(orders.id, orderId)
+      )
+    )
+    .returning();
+
+  const cancelled = rows[0] || null;
+  if (cancelled) {
+    emitOrderStatusChanged(restaurantId, cancelled);
+    
+    // If order was for a table, set table back to AVAILABLE
+    if (cancelled.tableId) {
+      try {
+        const tableRows = await db
+          .update(tables)
+          .set({
+            currentStatus: "AVAILABLE",
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tables.restaurantId, restaurantId),
+              eq(tables.id, cancelled.tableId)
+            )
+          )
+          .returning();
+        
+        if (tableRows[0]) {
+          emitTableStatusChanged(restaurantId, tableRows[0]);
+        }
+      } catch (err) {
+        console.error("Failed to update table status:", err);
+      }
+    }
+  }
+  
+  return cancelled;
+}
+
+
+/**
+ * ✅ FIX #2: Create order with proper open/closed logic
+ * Only reuses existing order if it's OPEN (is_closed = false)
+ * Closed orders will trigger creation of new order
  */
 export async function createOrder(restaurantId, data, placedByStaffId = null) {
   const {
@@ -151,10 +324,12 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     orderType = "DINE_IN",
     items = [],
     notes,
+    paymentMethod = "DUE",
+    paymentStatus = "DUE",
   } = data;
 
-  // If this is a DINE_IN order for a specific table, reuse the existing
-  // active order (one running bill per table) instead of creating a new one.
+  // ✅ FIX: Only reuse order if it's OPEN (is_closed = false)
+  // This prevents adding items to completed/closed orders
   if (tableId && orderType === "DINE_IN") {
     const existingRows = await db
       .select()
@@ -164,7 +339,12 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
           eq(orders.restaurantId, restaurantId),
           eq(orders.tableId, tableId),
           eq(orders.orderType, "DINE_IN"),
-          sql`${orders.status} IN ('PENDING', 'PREPARING', 'READY', 'SERVED')`,
+          eq(orders.isClosed, false), // ✅ CRITICAL: Only open orders
+          // Include orders in any active state OR partially paid
+          or(
+            inArray(orders.status, ['PENDING', 'PREPARING', 'READY', 'SERVED']),
+            eq(orders.paymentStatus, 'PARTIALLY_PAID')
+          )
         ),
       )
       .orderBy(desc(orders.createdAt))
@@ -172,6 +352,8 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
 
     const existing = existingRows[0];
     if (existing) {
+      console.log("🔄 Found OPEN order for table, adding items to it:", existing.id);
+      
       // Optionally enrich guest info if provided
       if ((guestName && !existing.guestName) || (guestPhone && !existing.guestPhone) || notes) {
         await db
@@ -185,9 +367,14 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
           .where(eq(orders.id, existing.id));
       }
 
+      // Add items to existing order (this will handle payment status properly)
       const { order: updatedOrder } = await addOrderItems(restaurantId, existing.id, items);
-      // Keep API shape: return the order object (with items) like a "create"
+      
+      console.log("✅ Items added to existing OPEN order. Payment status:", updatedOrder.paymentStatus);
+      
       return updatedOrder;
+    } else {
+      console.log("📝 No open order found for table, creating new order");
     }
   }
 
@@ -215,7 +402,13 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
   console.log("-----");
   console.log("✅ Order placed by staff ID:", placedByStaffId);
   
-  // Create order
+  const finalOrderStatus = "PENDING";
+  const finalPaymentStatus = paymentStatus;
+  
+  // If payment is made upfront (PAID status), track the paid amount
+  const paid_amount = paymentStatus === "PAID" ? totalAmount.toFixed(2) : "0";
+
+  // Create order (defaults to OPEN - is_closed = false)
   const orderRows = await db
     .insert(orders)
     .values({
@@ -224,19 +417,22 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
       guestName: guestName || null,
       guestPhone: guestPhone || null,
       placedByStaffId: placedByStaffId || null,
-      status: "PENDING",
+      status: finalOrderStatus,
+      paymentStatus: finalPaymentStatus,
       orderType,
       subtotalAmount: subtotal.toFixed(2),
       gstAmount: gstAmount.toFixed(2),
       serviceTaxAmount: serviceTaxAmount.toFixed(2),
       discountAmount: "0",
       totalAmount: totalAmount.toFixed(2),
+      paid_amount: paid_amount,
       notes: notes || null,
+      isClosed: false, // ✅ New orders are always OPEN
     })
     .returning();
 
   const order = orderRows[0];
-  console.log(order);
+  console.log("📝 New OPEN order created:", order.id, "Payment status:", order.paymentStatus);
 
   // Create order items with customization data
   const orderItemsData = processedItems.map((item) => ({
@@ -284,6 +480,26 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     
     if (tableRows[0]) {
       emitTableStatusChanged(restaurantId, tableRows[0]);
+    }
+  }
+
+  // If paid upfront, create transaction record
+  if (paymentStatus === "PAID" && paymentMethod && paymentMethod !== "DUE") {
+    const billNumber = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+    const { createTransaction } = await import("../transaction/service.js");
+    
+    try {
+      await createTransaction(restaurantId, order.id, {
+        billNumber,
+        paymentMethod: paymentMethod.toUpperCase(),
+        combinedSubtotal: parseFloat(order.subtotalAmount),
+        combinedGst: parseFloat(order.gstAmount),
+        combinedService: parseFloat(order.serviceTaxAmount),
+        combinedTotal: parseFloat(order.totalAmount),
+      });
+      console.log("💳 Transaction created for prepaid order");
+    } catch (err) {
+      console.error("Failed to create transaction for prepaid order:", err);
     }
   }
 
@@ -344,6 +560,7 @@ export async function getOrder(restaurantId, orderId) {
 
   return {
     ...order,
+    paid_amount: order.paid_amount || order.paid_amount,
     items: parsedItems,
     placedByStaff: staffInfo,
   };
@@ -370,14 +587,28 @@ export async function listOrders(restaurantId, filters = {}) {
 
   let conditions = [eq(orders.restaurantId, restaurantId)];
 
-  // Exclude PAID orders by default unless explicitly requested
   if (excludePaid) {
-    conditions.push(sql`${orders.status} != 'PAID'`);
+    // Exclude CANCELLED orders
+    conditions.push(not(eq(orders.status, 'CANCELLED')));
+    // Exclude orders that are both SERVED AND PAID AND CLOSED
+    conditions.push(
+      or(
+        not(eq(orders.status, 'SERVED')),
+        not(eq(orders.paymentStatus, 'PAID')),
+        not(eq(orders.isClosed, true)) // ✅ Show PAID orders if still OPEN
+      )
+    );
   }
 
+
   if (status) {
-    conditions.push(eq(orders.status, status));
+    if (Array.isArray(status)) {
+      conditions.push(inArray(orders.status, status));
+    } else {
+      conditions.push(eq(orders.status, status));
+    }
   }
+
   if (orderType) {
     conditions.push(eq(orders.orderType, orderType));
   }
@@ -459,6 +690,7 @@ export async function listOrders(restaurantId, filters = {}) {
 
       return {
         ...order,
+        paid_amount: order.paid_amount || order.paid_amount || "0",
         items: parsedItems,
         table: tableInfo,
         placedByStaff: staffInfo,
@@ -548,6 +780,90 @@ export async function cancelOrder(restaurantId, orderId) {
 }
 
 /**
+ * ✅ NEW: Close an order (mark as is_closed = true)
+ * This prevents future orders from being added to this order
+ * Only available for SERVED + PAID orders
+ */
+export async function closeOrder(restaurantId, orderId) {
+  const order = await getOrder(restaurantId, orderId);
+  if (!order) {
+    throw new Error("Order not found");
+  }
+
+  // Validate order can be closed
+  if (order.status !== "SERVED") {
+    throw new Error("Order must be SERVED before closing");
+  }
+  if (order.paymentStatus !== "PAID") {
+    throw new Error("Order must be fully PAID before closing");
+  }
+  if (order.isClosed) {
+    throw new Error("Order is already closed");
+  }
+
+  const rows = await db
+    .update(orders)
+    .set({
+      isClosed: true,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(orders.restaurantId, restaurantId),
+        eq(orders.id, orderId)
+      )
+    )
+    .returning();
+
+  const updated = rows[0] || null;
+  if (updated) {
+    console.log("🔒 Order closed:", orderId);
+    emitOrderUpdated(restaurantId, updated);
+    
+    // If table order, check if we should free the table
+    if (updated.tableId) {
+      // Check if there are any other OPEN orders for this table
+      const otherOpenOrders = await db
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.restaurantId, restaurantId),
+            eq(orders.tableId, updated.tableId),
+            eq(orders.isClosed, false),
+            not(eq(orders.id, orderId))
+          )
+        )
+        .limit(1);
+
+      // If no other open orders, free the table
+      if (otherOpenOrders.length === 0) {
+        const tableRows = await db
+          .update(tables)
+          .set({
+            currentStatus: "AVAILABLE",
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tables.restaurantId, restaurantId),
+              eq(tables.id, updated.tableId)
+            )
+          )
+          .returning();
+        
+        if (tableRows[0]) {
+          emitTableStatusChanged(restaurantId, tableRows[0]);
+          console.log("✅ Table freed:", tableRows[0].tableNumber);
+        }
+      }
+    }
+  }
+  
+  return updated;
+}
+
+/**
  * Get active orders for kitchen (PENDING, PREPARING, READY) with customization
  * @param {string} restaurantId - Restaurant ID
  * @returns {Promise<Array>} Active orders with items
@@ -559,7 +875,7 @@ export async function getKitchenOrders(restaurantId) {
     .where(
       and(
         eq(orders.restaurantId, restaurantId),
-        sql`${orders.status} IN ('PENDING', 'PREPARING', 'READY')`
+        inArray(orders.status, ['PENDING', 'PREPARING', 'READY'])
       )
     )
     .orderBy(orders.createdAt);
@@ -638,7 +954,7 @@ export async function getOrderHistory(restaurantId, options = {}) {
 
   let conditions = [
     eq(orders.restaurantId, restaurantId),
-    sql`${orders.status} IN (${sql.join(status.map(s => sql`${s}`), sql`, `)})`,
+    inArray(orders.status, status),
   ];
 
   if (fromDate) {
@@ -712,6 +1028,7 @@ export async function getOrderStats(restaurantId, options = {}) {
 
 /**
  * Add items to existing order (with customization support)
+ * Handles partial payment status when adding items to paid orders
  * @param {string} restaurantId - Restaurant ID
  * @param {string} orderId - Order ID
  * @param {Array} items - Items to add (may include variantId and modifierIds)
@@ -723,6 +1040,17 @@ export async function addOrderItems(restaurantId, orderId, items) {
   if (!order) {
     throw new Error("Order not found");
   }
+
+  // ✅ CRITICAL: Cannot add items to CLOSED orders
+  if (order.isClosed) {
+    throw new Error("Cannot add items to a closed order. Please create a new order.");
+  }
+
+  console.log("📦 Adding items to order:", orderId);
+  console.log("Current payment status:", order.paymentStatus);
+  console.log("Current total:", order.totalAmount);
+  console.log("Current paid amount:", order.paid_amount || "0");
+  console.log("Order closed?", order.isClosed);
 
   // Process new items with customization
   const { processedItems, subtotal: additionalTotal } = await processOrderItemsWithCustomization(
@@ -768,7 +1096,38 @@ export async function addOrderItems(restaurantId, orderId, items) {
   const newService = newSubtotal * serviceRate;
   const newTotal = newSubtotal + newGst + newService;
 
-  // Update order totals
+  // CRITICAL: Handle payment status when adding items to a paid order
+  let newPaymentStatus = order.paymentStatus;
+  let newOrderStatus = order.status;
+  let updatedPaidAmount = parseFloat(order.paid_amount || "0");
+  
+  // If order was fully PAID and we're adding new items, mark as PARTIALLY_PAID
+  if (order.paymentStatus === "PAID" && additionalTotal > 0) {
+    newPaymentStatus = "PARTIALLY_PAID";
+    
+    console.log("💰 Order was PAID, now PARTIALLY_PAID");
+    console.log("Previous total:", order.totalAmount);
+    console.log("New total:", newTotal.toFixed(2));
+    console.log("Amount already paid:", updatedPaidAmount.toFixed(2));
+    console.log("Outstanding amount:", (newTotal - updatedPaidAmount).toFixed(2));
+    
+    // Don't reset order status to PENDING if it was SERVED
+    if (order.status !== "SERVED") {
+      newOrderStatus = "PENDING"; // New items need to be prepared
+    }
+  } else if (order.paymentStatus === "PARTIALLY_PAID" && additionalTotal > 0) {
+    console.log("💰 Order already PARTIALLY_PAID, keeping status");
+    
+    if (order.status !== "SERVED") {
+      newOrderStatus = "PENDING";
+    }
+  } else if (order.status === "SERVED" || order.status === "READY") {
+    // If adding items to SERVED/READY order (not necessarily paid), 
+    // set back to PENDING so kitchen sees it
+    newOrderStatus = "PENDING";
+  }
+
+  // Update order totals and payment status
   await db
     .update(orders)
     .set({
@@ -776,34 +1135,21 @@ export async function addOrderItems(restaurantId, orderId, items) {
       gstAmount: newGst.toFixed(2),
       serviceTaxAmount: newService.toFixed(2),
       totalAmount: newTotal.toFixed(2),
+      paid_amount: updatedPaidAmount.toFixed(2), // Keep the same paid amount
+      paymentStatus: newPaymentStatus,
+      status: newOrderStatus,
       updatedAt: new Date(),
     })
     .where(eq(orders.id, orderId));
 
   const updatedOrder = await getOrder(restaurantId, orderId);
   if (updatedOrder) {
-    // If order was SERVED or READY and we're adding items, change status back to PENDING
-    // so kitchen sees it as a new order (but it's still the same order ID for billing)
-    if (order.status === "SERVED" || order.status === "READY") {
-      await db
-        .update(orders)
-        .set({
-          status: "PENDING",
-          updatedAt: new Date(),
-        })
-        .where(eq(orders.id, orderId));
-      
-      const refreshedOrder = await getOrder(restaurantId, orderId);
-      if (refreshedOrder) {
-        emitOrderStatusChanged(restaurantId, refreshedOrder);
-        emitOrderItemsAdded(restaurantId, orderId, newItems, refreshedOrder);
-        return {
-          order: refreshedOrder,
-          newItems,
-        };
-      }
-    }
+    console.log("✅ Order updated successfully");
+    console.log("Final payment status:", updatedOrder.paymentStatus);
+    console.log("Final total:", updatedOrder.totalAmount);
+    console.log("Final paid amount:", updatedOrder.paid_amount);
     
+    emitOrderStatusChanged(restaurantId, updatedOrder);
     emitOrderItemsAdded(restaurantId, orderId, newItems, updatedOrder);
   }
 
@@ -812,6 +1158,7 @@ export async function addOrderItems(restaurantId, orderId, items) {
     newItems,
   };
 }
+
 
 /**
  * Remove an item from an order

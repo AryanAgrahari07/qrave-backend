@@ -62,9 +62,7 @@ export const selectionTypeEnum = pgEnum("selection_type", ["SINGLE", "MULTIPLE"]
 // Platform users (SaaS owners / platform admins)
 //
 export const users = pgTable("users", {
-  id: varchar("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: varchar("email", { length: 255 }).notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   fullName: varchar("full_name", { length: 150 }),
@@ -237,6 +235,14 @@ export const tables = pgTable("tables", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
+
+
+export const paymentStatusEnum = pgEnum("payment_status_enum", [
+  "DUE",
+  "PAID",
+  "PARTIALLY_PAID",
+]);
+
 //
 // Orders
 //
@@ -252,23 +258,17 @@ export const orders = pgTable("orders", {
   guestPhone: varchar("guest_phone", { length: 20 }),
   placedByStaffId: varchar("placed_by_staff_id").references(() => staff.id, { onDelete: "set null" }),
   status: orderStatusEnum("status").notNull().default("PENDING"),
+  paymentStatus: paymentStatusEnum("payment_status").notNull().default("DUE"),
+  cancelReason: text("cancel_reason"),
   orderType: orderTypeEnum("order_type").notNull().default("DINE_IN"),
-  subtotalAmount: numeric("subtotal_amount", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  gstAmount: numeric("gst_amount", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  serviceTaxAmount: numeric("service_tax_amount", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
-  totalAmount: numeric("total_amount", { precision: 12, scale: 2 })
-    .notNull()
-    .default("0"),
+  subtotalAmount: numeric("subtotal_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  gstAmount: numeric("gst_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  serviceTaxAmount: numeric("service_tax_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  discountAmount: numeric("discount_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  totalAmount: numeric("total_amount", { precision: 12, scale: 2 }).notNull().default("0"),
+  paid_amount: numeric("paid_amount", { precision: 10, scale: 2 }).notNull().default("0"),
   notes: text("notes"),
+  isClosed: boolean("is_closed").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
@@ -278,18 +278,10 @@ export const orders = pgTable("orders", {
 // Order items
 //
 export const orderItems = pgTable("order_items", {
-  id: varchar("id")
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  restaurantId: varchar("restaurant_id")
-    .notNull()
-    .references(() => restaurants.id, { onDelete: "cascade" }),
-  orderId: varchar("order_id")
-    .notNull()
-    .references(() => orders.id, { onDelete: "cascade" }),
-  menuItemId: varchar("menu_item_id")
-    .notNull()
-    .references(() => menuItems.id),
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id").notNull().references(() => restaurants.id, { onDelete: "cascade" }),
+  orderId: varchar("order_id").notNull().references(() => orders.id, { onDelete: "cascade" }),
+  menuItemId: varchar("menu_item_id").notNull().references(() => menuItems.id),
   itemName: varchar("item_name", { length: 200 }).notNull(),
   unitPrice: numeric("unit_price", { precision: 10, scale: 2 }).notNull(),
   quantity: integer("quantity").notNull(),

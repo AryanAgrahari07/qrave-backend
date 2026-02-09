@@ -15,6 +15,9 @@ import {
   getOrderStats,
   addOrderItems,
   removeOrderItem,
+  updatePaymentStatus,
+  cancelOrderWithReason,
+  closeOrder, // ✅ NEW
 } from "./service.js";
 
 const router = express.Router({ mergeParams: true });
@@ -35,7 +38,9 @@ const createOrderSchema = z.object({
   orderType: z.enum(["DINE_IN", "TAKEAWAY", "DELIVERY"]).optional().default("DINE_IN"),
   items: z.array(orderItemSchema).min(1, "Order must have at least one item"),
   notes: z.string().optional(),
-  assignedWaiterId: z.string().uuid().optional(), // Optional waiter assignment when admin places order manually
+  assignedWaiterId: z.string().uuid().optional(),
+  paymentMethod: z.enum(["CASH", "CARD", "UPI", "DUE"]).optional().default("DUE"), 
+  paymentStatus: z.enum(["PAID", "DUE", "PARTIALLY_PAID"]).optional().default("DUE"),
 });
 
 const updateOrderStatusSchema = z.object({
@@ -63,8 +68,16 @@ const listOrdersQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional().default(0),
 });
 
+const updatePaymentStatusSchema = z.object({
+  paymentStatus: z.enum(["DUE", "PAID", "PARTIALLY_PAID"]),
+  paymentMethod: z.enum(["CASH", "CARD", "UPI", "DUE"]).optional(),
+});
+
+const cancelOrderWithReasonSchema = z.object({
+  reason: z.string().min(3, "Cancel reason must be at least 3 characters").max(500),
+});
+
 export function registerOrderRoutes(app) {
-  // Order routes scoped to restaurant
   app.use(
     "/api/restaurants/:restaurantId/orders",
     requireAuth,
@@ -88,23 +101,14 @@ export function registerOrderRoutes(app) {
       }
 
       try {
-        // DEBUG: Log authentication info
         console.log("=== Order Creation Debug ===");
         console.log("req.user:", JSON.stringify(req.user, null, 2));
         
-        // Extract staff ID from authenticated user
-        // req.user can be from users table (owner, admin, platform_admin) OR staff table (WAITER, KITCHEN, ADMIN)
-        // For owners/admins placing orders, save their user ID
-        // For staff (waiters/kitchen), save their staff ID
-        // If assignedWaiterId is provided in the request, use that instead (for admin manual assignment)
         let placedByStaffId = null;
         
-        // Priority: assignedWaiterId from request > staff member's own ID
         if (parsed.data.assignedWaiterId) {
-          // Admin is manually assigning order to a waiter
           placedByStaffId = parsed.data.assignedWaiterId;
         } else if (req.user) {
-          // For staff members, use staffId or id
           if (req.user.staffId) {
             placedByStaffId = req.user.staffId;
           } else if (req.user.isStaff) {
@@ -113,15 +117,11 @@ export function registerOrderRoutes(app) {
         }
         
         console.log("✅ Order placed by staff ID:", placedByStaffId);
-       
-        console.log("Final placedByStaffId:", placedByStaffId);
         console.log("============================");
         
-        // Remove assignedWaiterId from data before passing to createOrder (it's handled above)
         const { assignedWaiterId, ...orderData } = parsed.data;
         const order = await createOrder(restaurantId, orderData, placedByStaffId);
         
-        // Auto-assign waiter to table if they placed an order for it
         if (parsed.data.tableId && placedByStaffId && (req.user?.role === "WAITER" || req.user?.role === "ADMIN")) {
           try {
             const { assignWaiterToTable } = await import("../table/service.js");
@@ -131,7 +131,6 @@ export function registerOrderRoutes(app) {
           }
         }
         
-        // Return enriched order with staff info
         const enrichedOrder = await getOrder(restaurantId, order.id);
         res.status(201).json({ order: enrichedOrder });
       } catch (error) {
@@ -159,13 +158,11 @@ export function registerOrderRoutes(app) {
         });
       }
 
-      // For WAITER role, automatically filter by their staff ID and exclude PAID orders
       const filters = { ...parsed.data };
       if (req.user?.role === "WAITER" && req.user?.staffId) {
         filters.placedByStaffId = req.user.staffId;
-        filters.excludePaid = true; // Always exclude PAID orders for waiters
+        filters.excludePaid = true;
       } else if (req.user?.role === "WAITER") {
-        // If waiter doesn't have staffId, they shouldn't see any orders
         return res.json({ 
           orders: [],
           pagination: {
@@ -181,7 +178,6 @@ export function registerOrderRoutes(app) {
 
       const result = await listOrders(restaurantId, filters);
       
-      // Calculate pagination metadata
       const total = result.total || 0;
       const limit = parsed.data.limit;
       const offset = parsed.data.offset;
@@ -345,7 +341,7 @@ export function registerOrderRoutes(app) {
     })
   );
 
-  // Get order history (completed/cancelled orders)
+  // Get order history
   router.get(
     "/history/all",
     requireRole("owner", "admin", "platform_admin"),
@@ -385,7 +381,7 @@ export function registerOrderRoutes(app) {
 
   // === Kitchen Display System (KDS) Endpoints ===
 
-  // Get active kitchen orders (PENDING, PREPARING)
+  // Get active kitchen orders
   router.get(
     "/kitchen/active",
     requireRole("owner", "admin", "platform_admin", "KITCHEN", "WAITER"),
@@ -397,7 +393,7 @@ export function registerOrderRoutes(app) {
     })
   );
 
-  // Mark order as preparing (from KDS)
+  // Mark order as preparing
   router.post(
     "/:orderId/kitchen/start",
     requireRole("owner", "admin", "platform_admin", "KITCHEN"),
@@ -414,7 +410,7 @@ export function registerOrderRoutes(app) {
     })
   );
 
-  // Mark order as ready (from KDS) - waiter will mark as SERVED
+  // Mark order as ready
   router.post(
     "/:orderId/kitchen/complete",
     requireRole("owner", "admin", "platform_admin", "KITCHEN"),
@@ -428,6 +424,115 @@ export function registerOrderRoutes(app) {
       }
 
       res.json({ order, message: "Order marked as ready for pickup" });
+    })
+  );
+
+  // Update payment status
+  router.patch(
+    "/:orderId/payment-status",
+    requireRole("owner", "admin", "platform_admin", "WAITER"),
+    rateLimit({ keyPrefix: "orders:payment-status", windowSeconds: 60, max: 200 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId, orderId } = req.params;
+      const parsed = updatePaymentStatusSchema.safeParse(req.body);
+
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid payment status data",
+          errors: parsed.error.errors,
+        });
+      }
+
+      try {
+        const order = await updatePaymentStatus(
+          restaurantId,
+          orderId,
+          parsed.data.paymentStatus,
+          parsed.data.paymentMethod
+        );
+
+        if (!order) {
+          return res.status(404).json({ message: "Order not found" });
+        }
+
+        res.json({ 
+          order,
+          message: `Payment status updated to ${parsed.data.paymentStatus}` 
+        });
+      } catch (error) {
+        console.error("Payment status update error:", error);
+        res.status(400).json({
+          message: error.message || "Failed to update payment status",
+        });
+      }
+    })
+  );
+
+  // Cancel order with reason
+  router.post(
+    "/:orderId/cancel-with-reason",
+    requireRole("owner", "admin", "platform_admin", "WAITER"),
+    rateLimit({ keyPrefix: "orders:cancel-reason", windowSeconds: 60, max: 100 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId, orderId } = req.params;
+      const parsed = cancelOrderWithReasonSchema.safeParse(req.body);
+
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid cancel data",
+          errors: parsed.error.errors,
+        });
+      }
+
+      try {
+        const order = await cancelOrderWithReason(
+          restaurantId,
+          orderId,
+          parsed.data.reason
+        );
+
+        if (!order) {
+          return res.status(404).json({ message: "Order not found" });
+        }
+
+        res.json({ 
+          order, 
+          message: "Order cancelled successfully" 
+        });
+      } catch (error) {
+        console.error("Cancel order error:", error);
+        res.status(400).json({
+          message: error.message || "Failed to cancel order",
+        });
+      }
+    })
+  );
+
+  // ✅ NEW: Close order (mark as complete)
+  router.post(
+    "/:orderId/close",
+    requireRole("owner", "admin", "platform_admin"),
+    rateLimit({ keyPrefix: "orders:close", windowSeconds: 60, max: 100 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId, orderId } = req.params;
+
+      try {
+        const order = await closeOrder(restaurantId, orderId);
+
+        if (!order) {
+          return res.status(404).json({ message: "Order not found" });
+        }
+
+        res.json({ 
+          order, 
+          message: "Order closed successfully. New orders for this table will create a fresh order." 
+        });
+      } catch (error) {
+        console.error("Close order error:", error);
+        res.status(400).json({
+          message: error.message || "Failed to close order",
+        });
+      }
     })
   );
 

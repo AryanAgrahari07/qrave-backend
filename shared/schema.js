@@ -64,6 +64,12 @@ export const selectionTypeEnum = pgEnum("selection_type", [
   "MULTIPLE",
 ]);
 
+export const paymentStatusEnum = pgEnum("payment_status", [
+  "DUE",
+  "PAID",
+  "PARTIALLY_PAID",
+]);
+
 //
 // USERS
 //
@@ -369,7 +375,6 @@ export const tables = pgTable("tables", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
-
 export const orders = pgTable("orders", {
   id: varchar("id")
     .primaryKey()
@@ -390,7 +395,16 @@ export const orders = pgTable("orders", {
   ),
 
   status: orderStatusEnum("status").notNull().default("PENDING"),
-  orderType: orderTypeEnum("order_type").notNull().default("DINE_IN"),
+
+  paymentStatus: paymentStatusEnum("payment_status")
+    .notNull()
+    .default("DUE"),
+
+  cancelReason: text("cancel_reason"),
+
+  orderType: orderTypeEnum("order_type")
+    .notNull()
+    .default("DINE_IN"),
 
   subtotalAmount: numeric("subtotal_amount", { precision: 12, scale: 2 })
     .notNull()
@@ -418,8 +432,12 @@ export const orders = pgTable("orders", {
     .notNull()
     .default("0"),
 
-  notes: text("notes"),
+  paid_amount: numeric("paid_amount", { precision: 10, scale: 2 })
+    .notNull()
+    .default("0"),
 
+  notes: text("notes"),
+  isClosed: boolean("is_closed").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
