@@ -1,6 +1,6 @@
 import { eq, and, desc, sql, gte, lte, or, ilike } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { transactions, orders, orderItems, tables } from "../../shared/schema.js";
+import { transactions, orders, orderItems, tables, staff } from "../../shared/schema.js";
 import { createPgPool } from "../db.js";
 import { emitTableStatusChanged } from "../realtime/events.js";
 

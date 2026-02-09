@@ -368,7 +368,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
       }
 
       // Add items to existing order (this will handle payment status properly)
-      const { order: updatedOrder } = await addOrderItems(restaurantId, existing.id, items);
+      const { order: updatedOrder } = await addOrderItems(restaurantId, existing.id, items, paymentMethod, paymentStatus);
       
       console.log("✅ Items added to existing OPEN order. Payment status:", updatedOrder.paymentStatus);
       
@@ -1028,13 +1028,15 @@ export async function getOrderStats(restaurantId, options = {}) {
 
 /**
  * Add items to existing order (with customization support)
- * Handles partial payment status when adding items to paid orders
+ * ✅ FIXED: Properly handles payment for new items
  * @param {string} restaurantId - Restaurant ID
  * @param {string} orderId - Order ID
  * @param {Array} items - Items to add (may include variantId and modifierIds)
+ * @param {string} paymentMethod - Payment method for new items (CASH, CARD, UPI, DUE)
+ * @param {string} paymentStatus - Payment status for new items (PAID, DUE)
  * @returns {Promise<object>} Updated order with new items
  */
-export async function addOrderItems(restaurantId, orderId, items) {
+export async function addOrderItems(restaurantId, orderId, items, paymentMethod = "DUE", paymentStatus = "DUE") {
   // Verify order exists and belongs to restaurant
   const order = await getOrder(restaurantId, orderId);
   if (!order) {
@@ -1051,6 +1053,8 @@ export async function addOrderItems(restaurantId, orderId, items) {
   console.log("Current total:", order.totalAmount);
   console.log("Current paid amount:", order.paid_amount || "0");
   console.log("Order closed?", order.isClosed);
+  console.log("New items payment method:", paymentMethod);
+  console.log("New items payment status:", paymentStatus);
 
   // Process new items with customization
   const { processedItems, subtotal: additionalTotal } = await processOrderItemsWithCustomization(
@@ -1096,36 +1100,57 @@ export async function addOrderItems(restaurantId, orderId, items) {
   const newService = newSubtotal * serviceRate;
   const newTotal = newSubtotal + newGst + newService;
 
-  // CRITICAL: Handle payment status when adding items to a paid order
+  // ✅ CRITICAL: Calculate taxes on ONLY the new items
+  const additionalTotalWithTax = additionalTotal + (additionalTotal * gstRate) + (additionalTotal * serviceRate);
+
+  // ✅ FIX: Handle payment for new items
+  let updatedPaidAmount = parseFloat(order.paid_amount || "0");
   let newPaymentStatus = order.paymentStatus;
   let newOrderStatus = order.status;
-  let updatedPaidAmount = parseFloat(order.paid_amount || "0");
-  
-  // If order was fully PAID and we're adding new items, mark as PARTIALLY_PAID
-  if (order.paymentStatus === "PAID" && additionalTotal > 0) {
-    newPaymentStatus = "PARTIALLY_PAID";
-    
-    console.log("💰 Order was PAID, now PARTIALLY_PAID");
-    console.log("Previous total:", order.totalAmount);
-    console.log("New total:", newTotal.toFixed(2));
-    console.log("Amount already paid:", updatedPaidAmount.toFixed(2));
-    console.log("Outstanding amount:", (newTotal - updatedPaidAmount).toFixed(2));
-    
-    // Don't reset order status to PENDING if it was SERVED
-    if (order.status !== "SERVED") {
-      newOrderStatus = "PENDING"; // New items need to be prepared
-    }
-  } else if (order.paymentStatus === "PARTIALLY_PAID" && additionalTotal > 0) {
-    console.log("💰 Order already PARTIALLY_PAID, keeping status");
-    
-    if (order.status !== "SERVED") {
-      newOrderStatus = "PENDING";
-    }
-  } else if (order.status === "SERVED" || order.status === "READY") {
-    // If adding items to SERVED/READY order (not necessarily paid), 
-    // set back to PENDING so kitchen sees it
-    newOrderStatus = "PENDING";
+
+  console.log("\n💰 Payment calculation for new items:");
+  console.log("Additional items subtotal:", additionalTotal.toFixed(2));
+  console.log("Additional items total (with tax):", additionalTotalWithTax.toFixed(2));
+  console.log("Payment method for new items:", paymentMethod);
+  console.log("Payment status for new items:", paymentStatus);
+
+  // If new items are being PAID (not DUE), add to paid_amount
+  if (paymentStatus === "PAID" && paymentMethod !== "DUE") {
+    updatedPaidAmount += additionalTotalWithTax;
+    console.log("✅ New items PAID - adding to paid_amount:", additionalTotalWithTax.toFixed(2));
+    console.log("Updated paid_amount:", updatedPaidAmount.toFixed(2));
+  } else {
+    console.log("⏳ New items marked as DUE - not adding to paid_amount");
   }
+
+  // Determine final payment status
+  if (updatedPaidAmount >= newTotal - 0.01) { // Allow 1 cent tolerance for rounding
+    newPaymentStatus = "PAID";
+    updatedPaidAmount = newTotal; // Ensure exact match
+    console.log("✅ Order now FULLY PAID");
+  } else if (updatedPaidAmount > 0) {
+    newPaymentStatus = "PARTIALLY_PAID";
+    console.log("⚠️ Order now PARTIALLY PAID");
+    console.log("Total:", newTotal.toFixed(2));
+    console.log("Paid:", updatedPaidAmount.toFixed(2));
+    console.log("Outstanding:", (newTotal - updatedPaidAmount).toFixed(2));
+  } else {
+    newPaymentStatus = "DUE";
+    console.log("📋 Order remains DUE");
+  }
+
+  // Determine order status
+  if (order.status === "SERVED" || order.status === "READY") {
+    // Adding items to SERVED/READY order - send back to kitchen
+    newOrderStatus = "PENDING";
+    console.log("🔄 Order status reset to PENDING (new items need preparation)");
+  }
+
+  console.log("\n📊 Final order state:");
+  console.log("New total:", newTotal.toFixed(2));
+  console.log("Final paid_amount:", updatedPaidAmount.toFixed(2));
+  console.log("Final payment status:", newPaymentStatus);
+  console.log("Final order status:", newOrderStatus);
 
   // Update order totals and payment status
   await db
@@ -1135,16 +1160,64 @@ export async function addOrderItems(restaurantId, orderId, items) {
       gstAmount: newGst.toFixed(2),
       serviceTaxAmount: newService.toFixed(2),
       totalAmount: newTotal.toFixed(2),
-      paid_amount: updatedPaidAmount.toFixed(2), // Keep the same paid amount
+      paid_amount: updatedPaidAmount.toFixed(2),
       paymentStatus: newPaymentStatus,
       status: newOrderStatus,
       updatedAt: new Date(),
     })
     .where(eq(orders.id, orderId));
 
+  // ✅ If new items were PAID, create/update transaction
+  if (paymentStatus === "PAID" && paymentMethod !== "DUE" && additionalTotalWithTax > 0) {
+    console.log("\n💳 Creating/updating transaction for paid items...");
+    
+    // Check if transaction exists
+    const existingTransactionRows = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.orderId, orderId))
+      .limit(1);
+
+    const existingTransaction = existingTransactionRows[0];
+
+    if (existingTransaction) {
+      // Update existing transaction
+      console.log("Updating existing transaction:", existingTransaction.id);
+      await db
+        .update(transactions)
+        .set({
+          paymentMethod: paymentMethod.toUpperCase(),
+          grandTotal: newTotal.toFixed(2),
+          subtotal: newSubtotal.toFixed(2),
+          gstAmount: newGst.toFixed(2),
+          serviceTaxAmount: newService.toFixed(2),
+          paidAt: new Date(),
+        })
+        .where(eq(transactions.id, existingTransaction.id));
+    } else {
+      // Create new transaction
+      console.log("Creating new transaction");
+      const billNumber = `INV-${Math.floor(1000 + Math.random() * 9000)}`;
+      const { createTransaction } = await import("../transaction/service.js");
+      
+      try {
+        await createTransaction(restaurantId, orderId, {
+          billNumber,
+          paymentMethod: paymentMethod.toUpperCase(),
+          combinedSubtotal: newSubtotal,
+          combinedGst: newGst,
+          combinedService: newService,
+          combinedTotal: newTotal,
+        });
+      } catch (err) {
+        console.error("Failed to create transaction:", err);
+      }
+    }
+  }
+
   const updatedOrder = await getOrder(restaurantId, orderId);
   if (updatedOrder) {
-    console.log("✅ Order updated successfully");
+    console.log("\n✅ Order updated successfully");
     console.log("Final payment status:", updatedOrder.paymentStatus);
     console.log("Final total:", updatedOrder.totalAmount);
     console.log("Final paid amount:", updatedOrder.paid_amount);

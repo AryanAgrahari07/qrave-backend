@@ -56,6 +56,8 @@ const updateOrderSchema = z.object({
 
 const addItemsSchema = z.object({
   items: z.array(orderItemSchema).min(1),
+  paymentMethod: z.enum(["CASH", "CARD", "UPI", "DUE"]).optional().default("DUE"),
+  paymentStatus: z.enum(["PAID", "DUE"]).optional().default("DUE"),
 });
 
 const listOrdersQuerySchema = z.object({
@@ -306,10 +308,12 @@ export function registerOrderRoutes(app) {
       }
 
       try {
-        const result = await addOrderItems(
-          restaurantId,
-          orderId,
-          parsed.data.items
+          const result = await addOrderItems(
+            restaurantId,
+            orderId,
+            parsed.data.items,
+            parsed.data.paymentMethod,
+            parsed.data.paymentStatus
         );
         res.json(result);
       } catch (error) {
