@@ -81,7 +81,7 @@ export async function generateRestaurantQR(restaurantId) {
   }
 
   // Get base URL from environment or use default
-  const baseUrl = env.appUrl || "https://qrave.app";
+  const baseUrl = env.appUrl || "https://qrave.netlify.app";
   const menuUrl = `${baseUrl}/r/${restaurant.slug}`;
 
   // Generate QR code

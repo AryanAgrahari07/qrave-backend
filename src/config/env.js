@@ -13,6 +13,7 @@ function requireEnv(name, fallback, allowMissingInDev = false) {
 export const env = {
   isProd,
   port: Number(process.env.PORT || "3001"),
+  appUrl: process.env.BASE_URL || process.env.FRONTEND_URL || "https://qrave.netlify.app/",
   corsOrigin: process.env.FRONTEND_URL || process.env.CORS_ORIGIN || "http://localhost:5173",
   sessionSecret: requireEnv("SESSION_SECRET", "dev-session-secret-change-me", true),
   sessionCookieName: process.env.SESSION_COOKIE_NAME || "qrave.sid",
@@ -25,7 +26,7 @@ export const env = {
   allowDevRegister: String(process.env.ALLOW_DEV_REGISTER || "true").toLowerCase() === "true",
   redisMode: (process.env.REDIS_MODE || "single").toLowerCase(),
   redisUrl: process.env.REDIS_URL,
-
+  
   geminiApiKey: process.env.GOOGLE_GEMINI_API_KEY || process.env.GEMINI_API_KEY,
   
   // S3 / object storage

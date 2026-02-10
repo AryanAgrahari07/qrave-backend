@@ -243,9 +243,6 @@ export async function generateLogoUploadUrl(restaurantId, contentType) {
   };
 }
 
-/**
- * Update restaurant logo
- */
 export async function updateRestaurantLogo(restaurantId, logoData) {
   const { type, url, key } = logoData;
 
@@ -262,27 +259,29 @@ export async function updateRestaurantLogo(restaurantId, logoData) {
     }
   }
 
+  // Ensure key is null if not provided (not undefined)
+  const logoKey = key !== undefined ? key : null;
+
   // Update restaurant settings
   const result = await pool.query(
     `UPDATE restaurants
      SET settings = COALESCE(settings, '{}'::jsonb) || 
                    jsonb_build_object(
                      'logo', jsonb_build_object(
-                       'type', $1,
-                       'url', $2,
-                       'key', $3,
-                       'updatedAt', $4
+                       'type', $1::text,
+                       'url', $2::text,
+                       'key', $3::text,
+                       'updatedAt', $4::text
                      )
                    ),
          updated_at = now()
      WHERE id = $5
      RETURNING id, name, settings`,
-    [type, url, key || null, new Date().toISOString(), restaurantId]
+    [type, url, logoKey, new Date().toISOString(), restaurantId]
   );
 
   return result.rows[0];
 }
-
 /**
  * Get restaurant logo
  */

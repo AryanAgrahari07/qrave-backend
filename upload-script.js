@@ -20,7 +20,6 @@ const __dirname = path.dirname(__filename);
 // ⚙️  EDIT THIS SECTION WITH YOUR VALUES
 // ============================================
 const CONFIG = {
- 
   
   // Path to your logos folder
   // Examples:
