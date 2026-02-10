@@ -1,33 +1,33 @@
-import { createPgPool } from "../db.js";
-import { env } from "../config/env.js";
-
-const pool = createPgPool(env.databaseUrl);
+import { Country, State, City } from 'country-state-city';
 
 // Countries
 export async function listCountries(searchQuery = "") {
   const query = searchQuery.trim().toLowerCase();
   
-  const result = await pool.query(
-    `SELECT code, name
-     FROM countries
-     WHERE LOWER(name) LIKE $1 OR LOWER(code) LIKE $1
-     ORDER BY name ASC
-     LIMIT 100`,
-    [`%${query}%`]
-  );
+  let countries = Country.getAllCountries();
   
-  return result.rows;
+  if (query) {
+    countries = countries.filter(c => 
+      c.name.toLowerCase().includes(query) || 
+      c.isoCode.toLowerCase().includes(query)
+    );
+  }
+  
+  return countries.map(c => ({
+    code: c.isoCode,
+    name: c.name
+  }));
 }
 
 export async function getCountryByCode(code) {
-  const result = await pool.query(
-    `SELECT code, name
-     FROM countries
-     WHERE code = $1`,
-    [code]
-  );
+  const country = Country.getCountryByCode(code);
   
-  return result.rows[0] || null;
+  if (!country) return null;
+  
+  return {
+    code: country.isoCode,
+    name: country.name
+  };
 }
 
 // States
@@ -38,87 +38,126 @@ export async function listStates(countryCode = null, searchQuery = "") {
     return [];
   }
   
-  const result = await pool.query(
-    `SELECT code, name, country_code AS "countryCode"
-     FROM states
-     WHERE country_code = $1 
-       AND (LOWER(name) LIKE $2 OR LOWER(code) LIKE $2)
-     ORDER BY name ASC
-     LIMIT 100`,
-    [countryCode, `%${query}%`]
-  );
+  let states = State.getStatesOfCountry(countryCode);
   
-  return result.rows;
+  if (query) {
+    states = states.filter(s => 
+      s.name.toLowerCase().includes(query) || 
+      s.isoCode.toLowerCase().includes(query)
+    );
+  }
+  
+  // Return the state isoCode (e.g., "MP")
+  return states.map(s => ({
+    code: s.isoCode,
+    name: s.name,
+    countryCode: s.countryCode
+  }));
 }
 
 export async function getStateByCode(code) {
-  const result = await pool.query(
-    `SELECT code, name, country_code AS "countryCode"
-     FROM states
-     WHERE code = $1`,
-    [code]
-  );
+  // Search across all countries to find the state
+  const allCountries = Country.getAllCountries();
   
-  return result.rows[0] || null;
+  for (const country of allCountries) {
+    const states = State.getStatesOfCountry(country.isoCode);
+    const state = states.find(s => s.isoCode === code);
+    
+    if (state) {
+      return {
+        code: state.isoCode,
+        name: state.name,
+        countryCode: state.countryCode
+      };
+    }
+  }
+  
+  return null;
 }
 
-// Cities
-export async function listCities(stateCode = null, searchQuery = "") {
+// Cities - SIMPLIFIED VERSION WITH BOTH COUNTRY AND STATE CODES
+export async function listCities(countryCode, stateCode, searchQuery = "") {
   const query = searchQuery.trim().toLowerCase();
   
-  if (!stateCode) {
+  if (!countryCode || !stateCode) {
     return [];
   }
   
-  const result = await pool.query(
-    `SELECT code, name, state_code AS "stateCode"
-     FROM cities
-     WHERE state_code = $1 
-       AND LOWER(name) LIKE $2
-     ORDER BY name ASC
-     LIMIT 100`,
-    [stateCode, `%${query}%`]
-  );
+  // Direct lookup - much faster!
+  let cities = City.getCitiesOfState(countryCode, stateCode);
   
-  return result.rows;
+  if (query) {
+    cities = cities.filter(c => 
+      c.name.toLowerCase().includes(query)
+    );
+  }
+  
+  // Map to your existing format
+  return cities.map(c => ({
+    code: `${stateCode}:${c.name}`,
+    name: c.name,
+    stateCode: stateCode
+  }));
 }
 
 export async function getCityByCode(code) {
-  const result = await pool.query(
-    `SELECT code, name, state_code AS "stateCode"
-     FROM cities
-     WHERE code = $1`,
-    [code]
-  );
+  // Parse code format "MP:Indore"
+  const parts = code.split(':');
+  if (parts.length !== 2) return null;
   
-  return result.rows[0] || null;
+  const [stateCode, cityName] = parts;
+  
+  // We need to find the country for this state
+  const allCountries = Country.getAllCountries();
+  
+  for (const country of allCountries) {
+    const states = State.getStatesOfCountry(country.isoCode);
+    const matchingState = states.find(s => s.isoCode === stateCode);
+    
+    if (matchingState) {
+      const cities = City.getCitiesOfState(country.isoCode, matchingState.isoCode);
+      const city = cities.find(c => c.name === cityName);
+      
+      if (city) {
+        return {
+          code: code,
+          name: city.name,
+          stateCode: stateCode
+        };
+      }
+    }
+  }
+  
+  return null;
 }
 
 // Currencies
+const CURRENCIES = [
+  { code: "INR", name: "Indian Rupee", symbol: "₹" },
+  { code: "USD", name: "US Dollar", symbol: "$" },
+  { code: "EUR", name: "Euro", symbol: "€" },
+  { code: "GBP", name: "British Pound", symbol: "£" },
+  { code: "AUD", name: "Australian Dollar", symbol: "A$" },
+  { code: "CAD", name: "Canadian Dollar", symbol: "C$" },
+  { code: "AED", name: "UAE Dirham", symbol: "د.إ" },
+  { code: "SGD", name: "Singapore Dollar", symbol: "S$" },
+  { code: "MYR", name: "Malaysian Ringgit", symbol: "RM" },
+  { code: "THB", name: "Thai Baht", symbol: "฿" },
+  { code: "JPY", name: "Japanese Yen", symbol: "¥" },
+];
+
 export async function listCurrencies(searchQuery = "") {
   const query = searchQuery.trim().toLowerCase();
   
-  const result = await pool.query(
-    `SELECT code, name, symbol
-     FROM currencies
-     WHERE LOWER(name) LIKE $1 
-        OR LOWER(code) LIKE $1 
-        OR LOWER(symbol) LIKE $1
-     ORDER BY name ASC
-     LIMIT 100`,
-    [`%${query}%`]
-  );
+  if (!query) return CURRENCIES;
   
-  return result.rows;
+  return CURRENCIES.filter(c => 
+    c.name.toLowerCase().includes(query) ||
+    c.code.toLowerCase().includes(query) ||
+    c.symbol.toLowerCase().includes(query)
+  );
 }
 
 export async function getCurrencyByCode(code) {
-  const result = await pool.query(
-    `SELECT code, name, symbol
-     FROM currencies
-     WHERE code = $1`,
-    [code]
-  );
-  
-  return result.rows[0] || null;
+  return CURRENCIES.find(c => c.code === code) || null;
 }

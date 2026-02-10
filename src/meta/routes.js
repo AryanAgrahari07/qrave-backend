@@ -65,21 +65,22 @@ export function registerMetaRoutes(app) {
     })
   );
 
-  // Cities
+  // Cities - NOW REQUIRES BOTH COUNTRY AND STATE
   router.get(
     "/cities",
     asyncHandler(async (req, res) => {
+      const countryCode = req.query.country || null;
       const stateCode = req.query.state || null;
       const searchQuery = req.query.q || "";
       
-      if (!stateCode) {
+      if (!countryCode || !stateCode) {
         return res.status(400).json({ 
-          message: "State code is required",
+          message: "Both country and state codes are required",
           cities: [] 
         });
       }
       
-      const cities = await listCities(stateCode, searchQuery);
+      const cities = await listCities(countryCode, stateCode, searchQuery);
       res.json({ cities });
     })
   );
