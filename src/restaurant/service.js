@@ -32,6 +32,10 @@ export async function getRestaurant(id) {
             address_line1 AS "addressLine1",
             address_line2 AS "addressLine2",
             city, state, postal_code AS "postalCode", country,
+            gst_number AS "gstNumber",
+            fssai_number AS "fssaiNumber",
+            email, phone_number AS "phoneNumber",
+            google_maps_link AS "googleMapsLink",
             qr_design AS "qrDesign", settings
      FROM restaurants
      WHERE id = $1`,
@@ -48,6 +52,10 @@ export async function getRestaurantBySlug(slug) {
             address_line1 AS "addressLine1",
             address_line2 AS "addressLine2",
             city, state, postal_code AS "postalCode", country,
+            gst_number AS "gstNumber",
+            fssai_number AS "fssaiNumber",
+            email, phone_number AS "phoneNumber",
+            google_maps_link AS "googleMapsLink",
             qr_design AS "qrDesign", settings
      FROM restaurants
      WHERE slug = $1`,
@@ -130,6 +138,11 @@ export async function updateRestaurant(id, data) {
     state: "state",
     postalCode: "postal_code",
     country: "country",
+    gstNumber: "gst_number",
+    fssaiNumber: "fssai_number",
+    email: "email",
+    phoneNumber: "phone_number",
+    googleMapsLink: "google_maps_link",
   };
 
   for (const [key, column] of Object.entries(updatable)) {

@@ -1,5 +1,5 @@
 {
-  "id": "7135d469-df8a-40fb-9538-075a68008584",
+  "id": "ff4b846d-2e01-4bbc-a43f-3019166b310f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -689,6 +689,193 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.menu_item_modifier_groups": {
+      "name": "menu_item_modifier_groups",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "menu_item_id": {
+          "name": "menu_item_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "modifier_group_id": {
+          "name": "modifier_group_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "menu_item_modifier_groups_menu_item_id_menu_items_id_fk": {
+          "name": "menu_item_modifier_groups_menu_item_id_menu_items_id_fk",
+          "tableFrom": "menu_item_modifier_groups",
+          "tableTo": "menu_items",
+          "columnsFrom": [
+            "menu_item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "menu_item_modifier_groups_modifier_group_id_modifier_groups_id_fk": {
+          "name": "menu_item_modifier_groups_modifier_group_id_modifier_groups_id_fk",
+          "tableFrom": "menu_item_modifier_groups",
+          "tableTo": "modifier_groups",
+          "columnsFrom": [
+            "modifier_group_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "menu_item_modifier_group_unique": {
+          "name": "menu_item_modifier_group_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "menu_item_id",
+            "modifier_group_id"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.menu_item_variants": {
+      "name": "menu_item_variants",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "menu_item_id": {
+          "name": "menu_item_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "variant_name": {
+          "name": "variant_name",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price": {
+          "name": "price",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "is_default": {
+          "name": "is_default",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_available": {
+          "name": "is_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "menu_item_variants_restaurant_id_restaurants_id_fk": {
+          "name": "menu_item_variants_restaurant_id_restaurants_id_fk",
+          "tableFrom": "menu_item_variants",
+          "tableTo": "restaurants",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "menu_item_variants_menu_item_id_menu_items_id_fk": {
+          "name": "menu_item_variants_menu_item_id_menu_items_id_fk",
+          "tableFrom": "menu_item_variants",
+          "tableTo": "menu_items",
+          "columnsFrom": [
+            "menu_item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.menu_items": {
       "name": "menu_items",
       "schema": "",
@@ -738,6 +925,13 @@
         },
         "is_available": {
           "name": "is_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "is_active": {
+          "name": "is_active",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,
@@ -843,6 +1037,218 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.modifier_groups": {
+      "name": "modifier_groups",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(150)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "selection_type": {
+          "name": "selection_type",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'MULTIPLE'"
+        },
+        "min_selections": {
+          "name": "min_selections",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "default": 0
+        },
+        "max_selections": {
+          "name": "max_selections",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_required": {
+          "name": "is_required",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "is_active": {
+          "name": "is_active",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "modifier_groups_restaurant_id_restaurants_id_fk": {
+          "name": "modifier_groups_restaurant_id_restaurants_id_fk",
+          "tableFrom": "modifier_groups",
+          "tableTo": "restaurants",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.modifiers": {
+      "name": "modifiers",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "varchar",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "restaurant_id": {
+          "name": "restaurant_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "modifier_group_id": {
+          "name": "modifier_group_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(150)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "price": {
+          "name": "price",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
+        "is_default": {
+          "name": "is_default",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "is_available": {
+          "name": "is_available",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": true
+        },
+        "sort_order": {
+          "name": "sort_order",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "modifiers_restaurant_id_restaurants_id_fk": {
+          "name": "modifiers_restaurant_id_restaurants_id_fk",
+          "tableFrom": "modifiers",
+          "tableTo": "restaurants",
+          "columnsFrom": [
+            "restaurant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "modifiers_modifier_group_id_modifier_groups_id_fk": {
+          "name": "modifiers_modifier_group_id_modifier_groups_id_fk",
+          "tableFrom": "modifiers",
+          "tableTo": "modifier_groups",
+          "columnsFrom": [
+            "modifier_group_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.order_items": {
       "name": "order_items",
       "schema": "",
@@ -908,6 +1314,38 @@
           "primaryKey": false,
           "notNull": false,
           "default": "now()"
+        },
+        "selected_variant_id": {
+          "name": "selected_variant_id",
+          "type": "varchar",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "variant_name": {
+          "name": "variant_name",
+          "type": "varchar(100)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "variant_price": {
+          "name": "variant_price",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "selected_modifiers": {
+          "name": "selected_modifiers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'[]'::jsonb"
+        },
+        "customization_amount": {
+          "name": "customization_amount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'0'"
         }
       },
       "indexes": {},
@@ -944,6 +1382,19 @@
           "tableTo": "menu_items",
           "columnsFrom": [
             "menu_item_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "order_items_selected_variant_id_menu_item_variants_id_fk": {
+          "name": "order_items_selected_variant_id_menu_item_variants_id_fk",
+          "tableFrom": "order_items",
+          "tableTo": "menu_item_variants",
+          "columnsFrom": [
+            "selected_variant_id"
           ],
           "columnsTo": [
             "id"
@@ -1007,6 +1458,20 @@
           "notNull": true,
           "default": "'PENDING'"
         },
+        "payment_status": {
+          "name": "payment_status",
+          "type": "payment_status_enum",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'DUE'"
+        },
+        "cancel_reason": {
+          "name": "cancel_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "order_type": {
           "name": "order_type",
           "type": "order_type",
@@ -1050,11 +1515,25 @@
           "notNull": true,
           "default": "'0'"
         },
+        "paid_amount": {
+          "name": "paid_amount",
+          "type": "numeric(10, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'0'"
+        },
         "notes": {
           "name": "notes",
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "is_closed": {
+          "name": "is_closed",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
         },
         "created_at": {
           "name": "created_at",
@@ -1206,6 +1685,36 @@
         "longitude": {
           "name": "longitude",
           "type": "numeric(10, 7)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "gst_number": {
+          "name": "gst_number",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "fssai_number": {
+          "name": "fssai_number",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "email": {
+          "name": "email",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "phone_number": {
+          "name": "phone_number",
+          "type": "varchar(20)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "google_maps_link": {
+          "name": "google_maps_link",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -1814,6 +2323,23 @@
         "CARD",
         "WALLET",
         "OTHER"
+      ]
+    },
+    "public.payment_status_enum": {
+      "name": "payment_status_enum",
+      "schema": "public",
+      "values": [
+        "DUE",
+        "PAID",
+        "PARTIALLY_PAID"
+      ]
+    },
+    "public.selection_type": {
+      "name": "selection_type",
+      "schema": "public",
+      "values": [
+        "SINGLE",
+        "MULTIPLE"
       ]
     },
     "public.staff_role": {

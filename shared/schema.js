@@ -104,6 +104,12 @@ export const restaurants = pgTable("restaurants", {
   postalCode: varchar("postal_code", { length: 20 }),
   country: varchar("country", { length: 100 }).default("India"),
 
+  gstNumber: varchar("gst_number", { length: 20 }),
+  fssaiNumber: varchar("fssai_number", { length: 20 }),
+  email: varchar("email", { length: 255 }),
+  phoneNumber: varchar("phone_number", { length: 20 }),
+  googleMapsLink: text("google_maps_link"),
+
   latitude: numeric("latitude", { precision: 10, scale: 7 }),
   longitude: numeric("longitude", { precision: 10, scale: 7 }),
 

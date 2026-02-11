@@ -28,6 +28,11 @@ const restaurantCreateSchema = z.object({
   state: z.string().max(100).nullable().optional(),
   postalCode: z.string().max(20).nullable().optional(),
   country: z.string().max(100).optional(),
+  gstNumber: z.string().max(20).nullable().optional(),
+  fssaiNumber: z.string().max(20).nullable().optional(),
+  email: z.string().email().max(255).nullable().optional(),
+  phoneNumber: z.string().max(20).nullable().optional(),
+  googleMapsLink: z.string().url().nullable().optional(),
   qrDesign: z
     .object({
       darkColor: z.string().optional(),

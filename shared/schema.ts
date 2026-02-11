@@ -94,6 +94,12 @@ export const restaurants = pgTable("restaurants", {
   latitude: numeric("latitude", { precision: 10, scale: 7 }),
   longitude: numeric("longitude", { precision: 10, scale: 7 }),
 
+  gstNumber: varchar("gst_number", { length: 20 }),
+  fssaiNumber: varchar("fssai_number", { length: 20 }),
+  email: varchar("email", { length: 255 }),
+  phoneNumber: varchar("phone_number", { length: 20 }),
+  googleMapsLink: text("google_maps_link"),
+
   currency: varchar("currency", { length: 10 }).notNull().default("₹"),
   taxRateGst: numeric("tax_rate_gst", { precision: 5, scale: 2 })
     .notNull()

@@ -5,36 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1769694962807,
-      "tag": "0000_petite_blonde_phantom",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1769871431559,
-      "tag": "0001_sour_skrulls",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1769939209773,
-      "tag": "0002_warm_dorian_gray",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1770059828624,
-      "tag": "0003_conscious_wrecker",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1770729567792,
-      "tag": "0004_ambiguous_vapor",
+      "when": 1770750375386,
+      "tag": "0000_curious_dreaming_celestial",
       "breakpoints": true
     }
   ]

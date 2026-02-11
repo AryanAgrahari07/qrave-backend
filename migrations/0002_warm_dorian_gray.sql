@@ -1,1 +1,0 @@
-ALTER TABLE "menu_item_variants" RENAME COLUMN "price_adjustment" TO "price";

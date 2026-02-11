@@ -4,8 +4,22 @@ import { env } from "../config/env.js";
 const pool = createPgPool(env.databaseUrl);
 
 export async function getRestaurantBySlug(slug) {
+  // Public menu needs basic restaurant profile details as well
+  // (address/contact/maps) so the live menu can show them.
   const result = await pool.query(
-    `SELECT id, name, slug, currency
+    `SELECT id,
+            name,
+            slug,
+            currency,
+            address_line1 AS "addressLine1",
+            address_line2 AS "addressLine2",
+            city,
+            state,
+            postal_code AS "postalCode",
+            country,
+            email,
+            phone_number AS "phoneNumber",
+            google_maps_link AS "googleMapsLink"
      FROM restaurants
      WHERE slug = $1 AND is_active = true`,
     [slug],
