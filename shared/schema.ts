@@ -315,6 +315,8 @@ export const transactions = pgTable("transactions", {
     .notNull()
     .references(() => orders.id, { onDelete: "cascade" }),
   billNumber: varchar("bill_number", { length: 50 }).notNull(),
+
+  // Amount snapshots
   subtotal: numeric("subtotal", { precision: 12, scale: 2 }).notNull(),
   gstAmount: numeric("gst_amount", { precision: 12, scale: 2 }).notNull(),
   serviceTaxAmount: numeric("service_tax_amount", {
@@ -325,6 +327,11 @@ export const transactions = pgTable("transactions", {
     .notNull()
     .default("0"),
   grandTotal: numeric("grand_total", { precision: 12, scale: 2 }).notNull(),
+
+  // Rate snapshots (so historical bills don't change when restaurant settings change)
+  taxRateGst: numeric("tax_rate_gst", { precision: 5, scale: 2 }),
+  taxRateService: numeric("tax_rate_service", { precision: 5, scale: 2 }),
+
   paymentMethod: paymentMethodEnum("payment_method").notNull(),
   paymentReference: varchar("payment_reference", { length: 100 }),
   paidAt: timestamp("paid_at", { withTimezone: true }).defaultNow(),

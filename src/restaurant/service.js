@@ -117,6 +117,28 @@ export async function createRestaurant(data) {
   return result.rows[0];
 }
 
+function normalizeSlug(baseSlug) {
+  const clean = String(baseSlug || "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  return clean || null;
+}
+
+async function assertSlugAvailable(slug, excludeId) {
+  const res = await pool.query(
+    `SELECT 1 FROM restaurants WHERE slug = $1 ${excludeId ? "AND id <> $2" : ""} LIMIT 1`,
+    excludeId ? [slug, excludeId] : [slug],
+  );
+  if (res.rowCount > 0) {
+    throw new Error("Slug already taken");
+  }
+}
+
 export async function updateRestaurant(id, data) {
   const fields = [];
   const values = [];
@@ -124,6 +146,7 @@ export async function updateRestaurant(id, data) {
 
   const updatable = {
     name: "name",
+    slug: "slug",
     type: "type",
     currency: "currency",
     plan: "plan",
@@ -144,6 +167,14 @@ export async function updateRestaurant(id, data) {
     phoneNumber: "phone_number",
     googleMapsLink: "google_maps_link",
   };
+
+  // If slug is requested, normalize and enforce uniqueness (do NOT auto-adjust).
+  if (data.slug !== undefined) {
+    const nextSlug = normalizeSlug(data.slug);
+    if (!nextSlug) throw new Error("Invalid slug");
+    await assertSlugAvailable(nextSlug, id);
+    data = { ...data, slug: nextSlug };
+  }
 
   for (const [key, column] of Object.entries(updatable)) {
     if (data[key] !== undefined) {

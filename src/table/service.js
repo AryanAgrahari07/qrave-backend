@@ -278,9 +278,15 @@ export async function assignWaiterToTable(restaurantId, tableId, staffId) {
     emitTableStatusChanged(restaurantId, enrichedTable);
     return enrichedTable;
   }
-  
-  emitTableStatusChanged(restaurantId, table);
-  return table;
+
+  // Keep response shape stable for clients
+  const enrichedTable = {
+    ...table,
+    assignedWaiter: null,
+  };
+
+  emitTableStatusChanged(restaurantId, enrichedTable);
+  return enrichedTable;
 }
 
 /**

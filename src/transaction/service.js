@@ -1,6 +1,6 @@
 import { eq, and, desc, sql, gte, lte, or, ilike } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { transactions, orders, orderItems, tables, staff } from "../../shared/schema.js";
+import { transactions, orders, orderItems, tables, staff, restaurants } from "../../shared/schema.js";
 import { createPgPool } from "../db.js";
 import { emitTableStatusChanged } from "../realtime/events.js";
 
@@ -46,6 +46,14 @@ export async function createTransaction(restaurantId, orderId, data) {
   const service = combinedService !== undefined ? combinedService : order.serviceTaxAmount;
   const total = combinedTotal !== undefined ? combinedTotal : order.totalAmount;
 
+  // Snapshot the tax rates used at the time of payment so receipts remain historical
+  const restaurantRows = await db
+    .select({ taxRateGst: restaurants.taxRateGst, taxRateService: restaurants.taxRateService })
+    .from(restaurants)
+    .where(eq(restaurants.id, restaurantId))
+    .limit(1);
+  const restaurant = restaurantRows[0];
+
   const transactionRows = await db
     .insert(transactions)
     .values({
@@ -57,6 +65,11 @@ export async function createTransaction(restaurantId, orderId, data) {
       serviceTaxAmount: service.toString(),
       discountAmount: order.discountAmount || "0",
       grandTotal: total.toString(),
+
+      // Rate snapshots
+      taxRateGst: restaurant?.taxRateGst ?? null,
+      taxRateService: restaurant?.taxRateService ?? null,
+
       paymentMethod,
       paymentReference: paymentReference || null,
     })

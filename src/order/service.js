@@ -288,6 +288,7 @@ export async function cancelOrderWithReason(restaurantId, orderId, cancelReason)
           .update(tables)
           .set({
             currentStatus: "AVAILABLE",
+            assignedWaiterId: null,
             updatedAt: new Date(),
           })
           .where(
@@ -468,6 +469,8 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
       .update(tables)
       .set({
         currentStatus: "OCCUPIED",
+        // Clear any previous waiter and set current if available
+        assignedWaiterId: placedByStaffId || null,
         updatedAt: new Date(),
       })
       .where(
@@ -842,6 +845,7 @@ export async function closeOrder(restaurantId, orderId) {
           .update(tables)
           .set({
             currentStatus: "AVAILABLE",
+            assignedWaiterId: null,
             updatedAt: new Date(),
           })
           .where(

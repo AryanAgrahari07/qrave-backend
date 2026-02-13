@@ -14,9 +14,16 @@ import {
 
 const router = express.Router();
 
+const slugSchema = z
+  .string()
+  .min(2)
+  .max(150)
+  .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug can contain only lowercase letters, numbers and hyphens")
+  .transform((s) => s.toLowerCase());
+
 const restaurantCreateSchema = z.object({
   name: z.string().min(2).max(200),
-  slug: z.string().min(2).max(150),
+  slug: slugSchema,
   type: z.string().max(50).optional(),
   currency: z.string().max(10).optional(),
   plan: z.string().max(50).optional(),
@@ -44,6 +51,7 @@ const restaurantCreateSchema = z.object({
 
 const restaurantUpdateSchema = restaurantCreateSchema.partial().extend({
   isActive: z.boolean().optional(),
+  slug: slugSchema.optional(),
 });
 
 export function registerRestaurantRoutes(app) {

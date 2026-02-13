@@ -531,6 +531,10 @@ export const transactions = pgTable("transactions", {
   grandTotal: numeric("grand_total", { precision: 12, scale: 2 })
     .notNull(),
 
+  // Rate snapshots (so historical bills don't change when restaurant settings change)
+  taxRateGst: numeric("tax_rate_gst", { precision: 5, scale: 2 }),
+  taxRateService: numeric("tax_rate_service", { precision: 5, scale: 2 }),
+
   paymentMethod: paymentMethodEnum("payment_method").notNull(),
 
   paymentReference: varchar("payment_reference", { length: 100 }),
