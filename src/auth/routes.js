@@ -7,10 +7,9 @@ import { env } from "../config/env.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import bcrypt from "bcryptjs";
-import { createPgPool } from "../db.js";
+import { pool } from "../dbClient.js";
 
 const router = express.Router();
-const pool = createPgPool(env.databaseUrl);
 
 let passportConfigured = false;
 

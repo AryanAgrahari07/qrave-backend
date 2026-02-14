@@ -1,5 +1,4 @@
 import { eq, and, desc, sql, gte, lte, inArray, not, or } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { 
   orders, 
   orderItems, 
@@ -9,9 +8,10 @@ import {
   menuItemVariants,
   modifiers,
   modifierGroups,
-  transactions
+  transactions,
+  staff
 } from "../../shared/schema.js";
-import { createPgPool } from "../db.js";
+import { db } from "../dbClient.js";
 import {
   emitOrderCreated,
   emitOrderItemsAdded,
@@ -19,9 +19,6 @@ import {
   emitOrderUpdated,
 } from "../realtime/events.js";
 import { emitTableStatusChanged } from "../realtime/events.js";
-
-const pool = createPgPool();
-const db = drizzle(pool);
 
 /**
  * Process order items with customization data
@@ -32,58 +29,40 @@ async function processOrderItemsWithCustomization(restaurantId, items) {
   const processedItems = [];
   let subtotal = 0;
 
-  for (const item of items) {
-    // Fetch base menu item
-    const menuItemRows = await db
-      .select()
-      .from(menuItems)
-      .where(
-        and(
-          eq(menuItems.id, item.menuItemId),
-          eq(menuItems.restaurantId, restaurantId)
-        )
-      )
-      .limit(1);
+  if (!items?.length) return { processedItems, subtotal };
 
-    const menuItem = menuItemRows[0];
-    if (!menuItem) {
-      throw new Error(`Menu item ${item.menuItemId} not found`);
-    }
+  // Batch fetch base menu items
+  const menuItemIds = Array.from(new Set(items.map((i) => i.menuItemId)));
+  const menuItemRows = await db
+    .select({ id: menuItems.id, name: menuItems.name, price: menuItems.price })
+    .from(menuItems)
+    .where(and(eq(menuItems.restaurantId, restaurantId), inArray(menuItems.id, menuItemIds)));
 
-    let basePrice = parseFloat(menuItem.price);
-    let variantData = null;
-    let modifiersData = [];
-    let customizationAmount = 0;
+  const menuItemMap = new Map(menuItemRows.map((m) => [m.id, m]));
 
-    // Handle variant selection (size/portion)
-    if (item.variantId) {
-      const variantRows = await db
-        .select()
+  // Batch fetch selected variants (variant price replaces base price)
+  const variantIds = Array.from(new Set(items.map((i) => i.variantId).filter(Boolean)));
+  const variantRows = variantIds.length
+    ? await db
+        .select({
+          id: menuItemVariants.id,
+          menuItemId: menuItemVariants.menuItemId,
+          variantName: menuItemVariants.variantName,
+          price: menuItemVariants.price,
+        })
         .from(menuItemVariants)
-        .where(
-          and(
-            eq(menuItemVariants.id, item.variantId),
-            eq(menuItemVariants.menuItemId, item.menuItemId),
-            eq(menuItemVariants.restaurantId, restaurantId)
-          )
-        )
-        .limit(1);
+        .where(and(eq(menuItemVariants.restaurantId, restaurantId), inArray(menuItemVariants.id, variantIds)))
+    : [];
 
-      if (variantRows[0]) {
-        const variant = variantRows[0];
-        variantData = {
-          id: variant.id,
-          name: variant.variantName,
-          price: parseFloat(variant.price),
-        };
-        // Variant price REPLACES base price (not adds to it)
-        basePrice = variantData.price;
-      }
-    }
+  const variantMap = new Map(variantRows.map((v) => [v.id, v]));
 
-    // Handle modifier selections (add-ons/toppings)
-    if (item.modifierIds && item.modifierIds.length > 0) {
-      const modifierRows = await db
+  // Batch fetch selected modifiers + their groups
+  const allModifierIds = Array.from(
+    new Set(items.flatMap((i) => (Array.isArray(i.modifierIds) ? i.modifierIds : [])).filter(Boolean)),
+  );
+
+  const modifierRows = allModifierIds.length
+    ? await db
         .select({
           id: modifiers.id,
           name: modifiers.name,
@@ -93,14 +72,41 @@ async function processOrderItemsWithCustomization(restaurantId, items) {
         })
         .from(modifiers)
         .innerJoin(modifierGroups, eq(modifiers.modifierGroupId, modifierGroups.id))
-        .where(
-          and(
-            inArray(modifiers.id, item.modifierIds),
-            eq(modifiers.restaurantId, restaurantId)
-          )
-        );
+        .where(and(eq(modifiers.restaurantId, restaurantId), inArray(modifiers.id, allModifierIds)))
+    : [];
 
-      for (const mod of modifierRows) {
+  const modifierMap = new Map(modifierRows.map((m) => [m.id, m]));
+
+  for (const item of items) {
+    const menuItem = menuItemMap.get(item.menuItemId);
+    if (!menuItem) {
+      throw new Error(`Menu item ${item.menuItemId} not found`);
+    }
+
+    let basePrice = parseFloat(menuItem.price);
+
+    let variantData = null;
+    if (item.variantId) {
+      const variant = variantMap.get(item.variantId);
+      // Preserve previous behavior: if variantId is provided but not found, ignore it.
+      if (variant && variant.menuItemId === item.menuItemId) {
+        variantData = {
+          id: variant.id,
+          name: variant.variantName,
+          price: parseFloat(variant.price),
+        };
+        basePrice = variantData.price;
+      }
+    }
+
+    let modifiersData = [];
+    let customizationAmount = 0;
+    if (Array.isArray(item.modifierIds) && item.modifierIds.length > 0) {
+      for (const mid of item.modifierIds) {
+        const mod = modifierMap.get(mid);
+        // Preserve previous behavior: silently ignore missing modifiers.
+        if (!mod) continue;
+
         const modPrice = parseFloat(mod.price);
         modifiersData.push({
           id: mod.id,
@@ -113,7 +119,6 @@ async function processOrderItemsWithCustomization(restaurantId, items) {
       }
     }
 
-    // Calculate item total: (base/variant price + modifiers) * quantity
     const itemTotal = (basePrice + customizationAmount) * item.quantity;
     subtotal += itemTotal;
 
@@ -124,7 +129,7 @@ async function processOrderItemsWithCustomization(restaurantId, items) {
       quantity: item.quantity,
       totalPrice: itemTotal.toFixed(2),
       notes: item.notes || null,
-      
+
       // Customization data (snapshot at order time)
       selectedVariantId: variantData?.id || null,
       variantName: variantData?.name || null,
@@ -519,19 +524,25 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
  * @returns {Promise<object|null>} Order with items
  */
 export async function getOrder(restaurantId, orderId) {
-  const orderRows = await db
-    .select()
+  const rows = await db
+    .select({
+      order: orders,
+      placedByStaff: {
+        id: staff.id,
+        fullName: staff.fullName,
+        role: staff.role,
+      },
+    })
     .from(orders)
-    .where(
-      and(
-        eq(orders.restaurantId, restaurantId),
-        eq(orders.id, orderId)
-      )
-    )
+    .leftJoin(staff, eq(staff.id, orders.placedByStaffId))
+    .where(and(eq(orders.restaurantId, restaurantId), eq(orders.id, orderId)))
     .limit(1);
 
-  const order = orderRows[0];
-  if (!order) return null;
+  const row = rows[0];
+  if (!row) return null;
+
+  const order = row.order;
+  const placedByStaff = row.placedByStaff?.id ? row.placedByStaff : null;
 
   // Get order items with customization data
   const items = await db
@@ -545,28 +556,105 @@ export async function getOrder(restaurantId, orderId) {
     selectedModifiers: item.selectedModifiers || [],
   }));
 
-  // Get staff info if available
-  let staffInfo = null;
-  if (order.placedByStaffId) {
-    const { staff } = await import("../../shared/schema.js");
-    const staffRows = await db
-      .select({
-        id: staff.id,
-        fullName: staff.fullName,
-        role: staff.role,
-      })
-      .from(staff)
-      .where(eq(staff.id, order.placedByStaffId))
-      .limit(1);
-    staffInfo = staffRows[0] || null;
-  }
-
   return {
     ...order,
     paid_amount: order.paid_amount || order.paid_amount,
     items: parsedItems,
-    placedByStaff: staffInfo,
+    placedByStaff,
   };
+}
+
+/**
+ * List cancelled orders (summary only) - lightweight and fast.
+ * Returns only important fields + table + staff (no items join).
+ */
+export async function listCancelledOrdersSummary(restaurantId, filters = {}) {
+  const {
+    orderType,
+    tableId,
+    fromDate,
+    toDate,
+    limit = 20,
+    offset = 0,
+    placedByStaffId,
+  } = filters;
+
+  const conditions = [
+    eq(orders.restaurantId, restaurantId),
+    eq(orders.status, "CANCELLED"),
+  ];
+
+  if (orderType) conditions.push(eq(orders.orderType, orderType));
+  if (tableId) conditions.push(eq(orders.tableId, tableId));
+  if (fromDate) conditions.push(gte(orders.updatedAt, new Date(fromDate)));
+  if (toDate) conditions.push(lte(orders.updatedAt, new Date(toDate)));
+  if (placedByStaffId) conditions.push(eq(orders.placedByStaffId, placedByStaffId));
+
+  const countResult = await db
+    .select({ count: sql`count(*)` })
+    .from(orders)
+    .where(and(...conditions));
+  const total = parseInt(countResult[0]?.count || 0);
+
+  const rows = await db
+    .select({
+      id: orders.id,
+      status: orders.status,
+      orderType: orders.orderType,
+      paymentStatus: orders.paymentStatus,
+      cancelReason: orders.cancelReason,
+      subtotalAmount: orders.subtotalAmount,
+      gstAmount: orders.gstAmount,
+      serviceTaxAmount: orders.serviceTaxAmount,
+      discountAmount: orders.discountAmount,
+      totalAmount: orders.totalAmount,
+      paid_amount: orders.paid_amount,
+      guestName: orders.guestName,
+      guestPhone: orders.guestPhone,
+      tableId: orders.tableId,
+      placedByStaffId: orders.placedByStaffId,
+      createdAt: orders.createdAt,
+      updatedAt: orders.updatedAt,
+      closedAt: orders.closedAt,
+      isClosed: orders.isClosed,
+    })
+    .from(orders)
+    .where(and(...conditions))
+    .orderBy(desc(orders.updatedAt))
+    .limit(limit)
+    .offset(offset);
+
+  // Enrich table + staff with minimal extra queries
+  const tableIds = Array.from(new Set(rows.map(r => r.tableId).filter(Boolean)));
+  const staffIds = Array.from(new Set(rows.map(r => r.placedByStaffId).filter(Boolean)));
+
+  let tableMap = new Map();
+  if (tableIds.length) {
+    const tableRows = await db
+      .select({ id: tables.id, tableNumber: tables.tableNumber, floorSection: tables.floorSection })
+      .from(tables)
+      .where(inArray(tables.id, tableIds));
+    tableMap = new Map(tableRows.map(t => [t.id, t]));
+  }
+
+  let staffMap = new Map();
+  if (staffIds.length) {
+    const { staff } = await import("../../shared/schema.js");
+    const staffRows = await db
+      .select({ id: staff.id, fullName: staff.fullName, role: staff.role })
+      .from(staff)
+      .where(inArray(staff.id, staffIds));
+    staffMap = new Map(staffRows.map(s => [s.id, s]));
+  }
+
+  const ordersSummary = rows.map(r => ({
+    ...r,
+    table: r.tableId ? tableMap.get(r.tableId) || null : null,
+    placedByStaff: r.placedByStaffId ? staffMap.get(r.placedByStaffId) || null : null,
+    items: undefined, // keep response light
+  }));
+
+  return { orders: ordersSummary, total };
 }
 
 /**
@@ -585,14 +673,19 @@ export async function listOrders(restaurantId, filters = {}) {
     limit = 50,
     offset = 0,
     placedByStaffId,
-    excludePaid = true, // Default to excluding PAID orders
+    excludePaid = true, // Default behavior for live orders lists
   } = filters;
 
   let conditions = [eq(orders.restaurantId, restaurantId)];
 
-  if (excludePaid) {
-    // Exclude CANCELLED orders
+  // If a specific status filter is provided, do NOT apply "excludePaid" heuristics.
+  // Otherwise, requesting status=CANCELLED would never return results.
+  const shouldApplyExcludePaid = excludePaid && !status;
+
+  if (shouldApplyExcludePaid) {
+    // Exclude CANCELLED orders from active/live lists
     conditions.push(not(eq(orders.status, 'CANCELLED')));
+
     // Exclude orders that are both SERVED AND PAID AND CLOSED
     conditions.push(
       or(
@@ -602,7 +695,6 @@ export async function listOrders(restaurantId, filters = {}) {
       )
     );
   }
-
 
   if (status) {
     if (Array.isArray(status)) {
@@ -646,60 +738,57 @@ export async function listOrders(restaurantId, filters = {}) {
     .limit(limit)
     .offset(offset);
 
-  // Get items and table info for each order
-  const ordersWithDetails = await Promise.all(
-    ordersList.map(async (order) => {
-      const items = await db
-        .select()
-        .from(orderItems)
-        .where(eq(orderItems.orderId, order.id));
+  if (ordersList.length === 0) {
+    return { orders: [], total };
+  }
 
-      // Parse selectedModifiers JSONB for each item
-      const parsedItems = items.map(item => ({
-        ...item,
-        selectedModifiers: item.selectedModifiers || [],
-      }));
+  // Batch fetch items, tables, and staff to avoid N+1 queries
+  const orderIds = ordersList.map((o) => o.id);
+  const tableIds = Array.from(new Set(ordersList.map((o) => o.tableId).filter(Boolean)));
+  const staffIds = Array.from(new Set(ordersList.map((o) => o.placedByStaffId).filter(Boolean)));
 
-      // Get table info if available
-      let tableInfo = null;
-      if (order.tableId) {
-        const tableRows = await db
-          .select()
+  const [itemsRows, tableRows, staffRows] = await Promise.all([
+    db.select().from(orderItems).where(inArray(orderItems.orderId, orderIds)),
+    tableIds.length
+      ? db
+          .select({ id: tables.id, tableNumber: tables.tableNumber, floorSection: tables.floorSection })
           .from(tables)
-          .where(eq(tables.id, order.tableId))
-          .limit(1);
-        tableInfo = tableRows[0] ? {
-          id: tableRows[0].id,
-          tableNumber: tableRows[0].tableNumber,
-          floorSection: tableRows[0].floorSection,
-        } : null;
-      }
+          .where(inArray(tables.id, tableIds))
+      : Promise.resolve([]),
+    staffIds.length
+      ? (async () => {
+          const { staff } = await import("../../shared/schema.js");
+          return db
+            .select({ id: staff.id, fullName: staff.fullName, role: staff.role })
+            .from(staff)
+            .where(inArray(staff.id, staffIds));
+        })()
+      : Promise.resolve([]),
+  ]);
 
-      // Get staff info if available
-      let staffInfo = null;
-      if (order.placedByStaffId) {
-        const { staff } = await import("../../shared/schema.js");
-        const staffRows = await db
-          .select({
-            id: staff.id,
-            fullName: staff.fullName,
-            role: staff.role,
-          })
-          .from(staff)
-          .where(eq(staff.id, order.placedByStaffId))
-          .limit(1);
-        staffInfo = staffRows[0] || null;
-      }
+  const itemsByOrderId = new Map();
+  for (const item of itemsRows) {
+    const parsed = { ...item, selectedModifiers: item.selectedModifiers || [] };
+    const arr = itemsByOrderId.get(item.orderId);
+    if (arr) arr.push(parsed);
+    else itemsByOrderId.set(item.orderId, [parsed]);
+  }
 
-      return {
-        ...order,
-        paid_amount: order.paid_amount || order.paid_amount || "0",
-        items: parsedItems,
-        table: tableInfo,
-        placedByStaff: staffInfo,
-      };
-    })
-  );
+  const tableMap = new Map(tableRows.map((t) => [t.id, t]));
+  const staffMap = new Map(staffRows.map((s) => [s.id, s]));
+
+  const ordersWithDetails = ordersList.map((order) => {
+    const tableInfo = order.tableId ? tableMap.get(order.tableId) || null : null;
+    const staffInfo = order.placedByStaffId ? staffMap.get(order.placedByStaffId) || null : null;
+
+    return {
+      ...order,
+      paid_amount: order.paid_amount || order.paid_amount || "0",
+      items: itemsByOrderId.get(order.id) || [],
+      table: tableInfo,
+      placedByStaff: staffInfo,
+    };
+  });
 
   return {
     orders: ordersWithDetails,
@@ -884,61 +973,48 @@ export async function getKitchenOrders(restaurantId) {
     )
     .orderBy(orders.createdAt);
 
-  // Get items for each order
-  const ordersWithItems = await Promise.all(
-    activeOrders.map(async (order) => {
-      const items = await db
-        .select()
-        .from(orderItems)
-        .where(eq(orderItems.orderId, order.id));
+  if (activeOrders.length === 0) return [];
 
-      // Parse selectedModifiers JSONB for each item
-      const parsedItems = items.map(item => ({
-        ...item,
-        selectedModifiers: item.selectedModifiers || [],
-      }));
+  const orderIds = activeOrders.map((o) => o.id);
+  const tableIds = Array.from(new Set(activeOrders.map((o) => o.tableId).filter(Boolean)));
+  const staffIds = Array.from(new Set(activeOrders.map((o) => o.placedByStaffId).filter(Boolean)));
 
-      // Get table info if available
-      let tableInfo = null;
-      if (order.tableId) {
-        const tableRows = await db
-          .select()
+  const [itemsRows, tableRows, staffRows] = await Promise.all([
+    db.select().from(orderItems).where(inArray(orderItems.orderId, orderIds)),
+    tableIds.length
+      ? db
+          .select({ id: tables.id, tableNumber: tables.tableNumber, floorSection: tables.floorSection })
           .from(tables)
-          .where(eq(tables.id, order.tableId))
-          .limit(1);
-        tableInfo = tableRows[0] ? {
-          id: tableRows[0].id,
-          tableNumber: tableRows[0].tableNumber,
-          floorSection: tableRows[0].floorSection,
-        } : null;
-      }
+          .where(inArray(tables.id, tableIds))
+      : Promise.resolve([]),
+    staffIds.length
+      ? (async () => {
+          const { staff } = await import("../../shared/schema.js");
+          return db
+            .select({ id: staff.id, fullName: staff.fullName, role: staff.role })
+            .from(staff)
+            .where(inArray(staff.id, staffIds));
+        })()
+      : Promise.resolve([]),
+  ]);
 
-      // Get staff info if available
-      let staffInfo = null;
-      if (order.placedByStaffId) {
-        const { staff } = await import("../../shared/schema.js");
-        const staffRows = await db
-          .select({
-            id: staff.id,
-            fullName: staff.fullName,
-            role: staff.role,
-          })
-          .from(staff)
-          .where(eq(staff.id, order.placedByStaffId))
-          .limit(1);
-        staffInfo = staffRows[0] || null;
-      }
+  const itemsByOrderId = new Map();
+  for (const item of itemsRows) {
+    const parsed = { ...item, selectedModifiers: item.selectedModifiers || [] };
+    const arr = itemsByOrderId.get(item.orderId);
+    if (arr) arr.push(parsed);
+    else itemsByOrderId.set(item.orderId, [parsed]);
+  }
 
-      return {
-        ...order,
-        items: parsedItems,
-        table: tableInfo,
-        placedByStaff: staffInfo,
-      };
-    })
-  );
+  const tableMap = new Map(tableRows.map((t) => [t.id, t]));
+  const staffMap = new Map(staffRows.map((s) => [s.id, s]));
 
-  return ordersWithItems;
+  return activeOrders.map((order) => ({
+    ...order,
+    items: itemsByOrderId.get(order.id) || [],
+    table: order.tableId ? tableMap.get(order.tableId) || null : null,
+    placedByStaff: order.placedByStaffId ? staffMap.get(order.placedByStaffId) || null : null,
+  }));
 }
 
 /**

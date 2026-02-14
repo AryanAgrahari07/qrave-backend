@@ -18,6 +18,7 @@ import {
   updatePaymentStatus,
   cancelOrderWithReason,
   closeOrder, // ✅ NEW
+  listCancelledOrdersSummary,
 } from "./service.js";
 
 const router = express.Router({ mergeParams: true });
@@ -141,6 +142,73 @@ export function registerOrderRoutes(app) {
           message: error.message || "Failed to create order",
         });
       }
+    })
+  );
+
+  // Lightweight cancelled orders summary (fast list)
+  router.get(
+    "/cancelled/summary",
+    requireRole("owner", "admin", "platform_admin", "WAITER", "KITCHEN"),
+    rateLimit({ keyPrefix: "orders:cancelled:summary", windowSeconds: 60, max: 300 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId } = req.params;
+
+      const summaryQuerySchema = z.object({
+        orderType: z.enum(["DINE_IN", "TAKEAWAY", "DELIVERY"]).optional(),
+        tableId: z.string().uuid().optional(),
+        fromDate: z.string().optional(),
+        toDate: z.string().optional(),
+        limit: z.coerce.number().int().positive().max(100).optional().default(20),
+        offset: z.coerce.number().int().min(0).optional().default(0),
+      });
+
+      const parsed = summaryQuerySchema.safeParse(req.query);
+      if (!parsed.success) {
+        return res.status(400).json({
+          message: "Invalid query parameters",
+          errors: parsed.error.errors,
+        });
+      }
+
+      const filters = { ...parsed.data };
+
+      // Keep waiter visibility consistent with listOrders
+      if (req.user?.role === "WAITER" && req.user?.staffId) {
+        filters.placedByStaffId = req.user.staffId;
+      } else if (req.user?.role === "WAITER") {
+        return res.json({
+          orders: [],
+          pagination: {
+            total: 0,
+            limit: parsed.data.limit,
+            offset: parsed.data.offset,
+            hasMore: false,
+            totalPages: 0,
+            currentPage: 1,
+          },
+        });
+      }
+
+      const result = await listCancelledOrdersSummary(restaurantId, filters);
+
+      const total = result.total || 0;
+      const limit = parsed.data.limit;
+      const offset = parsed.data.offset;
+      const hasMore = offset + limit < total;
+      const totalPages = Math.ceil(total / limit);
+      const currentPage = Math.floor(offset / limit) + 1;
+
+      res.json({
+        orders: result.orders,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore,
+          totalPages,
+          currentPage,
+        },
+      });
     })
   );
 

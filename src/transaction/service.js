@@ -1,11 +1,7 @@
 import { eq, and, desc, sql, gte, lte, or, ilike } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { transactions, orders, orderItems, tables, staff, restaurants } from "../../shared/schema.js";
-import { createPgPool } from "../db.js";
+import { db } from "../dbClient.js";
 import { emitTableStatusChanged } from "../realtime/events.js";
-
-const pool = createPgPool();
-const db = drizzle(pool);
 
 /**
  * Create a transaction when an order is paid

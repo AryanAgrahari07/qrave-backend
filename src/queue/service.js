@@ -1,7 +1,6 @@
 import { eq, and, desc, sql, inArray } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { guestQueue, restaurants, tables } from "../../shared/schema.js";
-import { createPgPool } from "../db.js";
+import { db } from "../dbClient.js";
 import {
   emitQueueBulkUpdated,
   emitQueueCalled,
@@ -12,8 +11,57 @@ import {
   emitTableStatusChanged,
 } from "../realtime/events.js";
 
-const pool = createPgPool();
-const db = drizzle(pool);
+async function getAvgWaitTimePerParty(restaurantId) {
+  const restaurantRows = await db
+    .select({ settings: restaurants.settings })
+    .from(restaurants)
+    .where(eq(restaurants.id, restaurantId))
+    .limit(1);
+
+  const restaurant = restaurantRows[0];
+  return restaurant?.settings?.avgWaitTimePerParty || 15;
+}
+
+function computeEstimatedWaitMinutes({ position, partySize, avgTimePerParty }) {
+  if (!position || position <= 0) return 0;
+
+  const sizeMultiplier = partySize > 4 ? 1.2 : 1.0;
+  const estimatedMinutes = Math.ceil((position - 1) * avgTimePerParty * sizeMultiplier);
+  return Math.max(estimatedMinutes, 5);
+}
+
+async function hydrateQueueEntry(restaurantId, entry) {
+  // Only WAITING entries have a position.
+  let position = 0;
+  if (entry.status === "WAITING") {
+    const countResult = await db
+      .select({ count: sql`count(*)` })
+      .from(guestQueue)
+      .where(
+        and(
+          eq(guestQueue.restaurantId, restaurantId),
+          eq(guestQueue.status, "WAITING"),
+          sql`${guestQueue.entryTime} < ${entry.entryTime}`,
+        ),
+      );
+
+    const beforeCount = parseInt(countResult[0]?.count || 0);
+    position = beforeCount + 1;
+  }
+
+  const avgTimePerParty = await getAvgWaitTimePerParty(restaurantId);
+  const estimatedWaitMinutes = computeEstimatedWaitMinutes({
+    position,
+    partySize: entry.partySize,
+    avgTimePerParty,
+  });
+
+  return {
+    ...entry,
+    position,
+    estimatedWaitMinutes,
+  };
+}
 
 /**
  * Register guest in queue (waitlist)
@@ -60,15 +108,7 @@ export async function registerInQueue(restaurantId, data) {
 
   const entry = queueRows[0];
 
-  // Calculate position and estimated wait time
-  const position = await getQueuePosition(restaurantId, entry.id);
-  const waitTime = await estimateWaitTime(restaurantId, position, partySize);
-
-  const result = {
-    ...entry,
-    position,
-    estimatedWaitMinutes: waitTime,
-  };
+  const result = await hydrateQueueEntry(restaurantId, entry);
 
   emitQueueRegistered(restaurantId, result);
 
@@ -96,15 +136,7 @@ export async function getQueueEntry(restaurantId, queueId) {
   const entry = rows[0];
   if (!entry) return null;
 
-  // Calculate current position and wait time
-  const position = await getQueuePosition(restaurantId, queueId);
-  const waitTime = await estimateWaitTime(restaurantId, position, entry.partySize);
-
-  return {
-    ...entry,
-    position,
-    estimatedWaitMinutes: waitTime,
-  };
+  return hydrateQueueEntry(restaurantId, entry);
 }
 
 /**
@@ -130,14 +162,7 @@ export async function getQueueEntryByPhone(restaurantId, phoneNumber) {
   const entry = rows[0];
   if (!entry) return null;
 
-  const position = await getQueuePosition(restaurantId, entry.id);
-  const waitTime = await estimateWaitTime(restaurantId, position, entry.partySize);
-
-  return {
-    ...entry,
-    position,
-    estimatedWaitMinutes: waitTime,
-  };
+  return hydrateQueueEntry(restaurantId, entry);
 }
 
 /**
@@ -153,13 +178,31 @@ export async function listQueue(restaurantId, filters = {}) {
     offset = 0,
   } = filters;
 
+  // Fetch restaurant wait-time settings once (avoid per-entry restaurant query)
+  const restaurantRows = await db
+    .select({ settings: restaurants.settings })
+    .from(restaurants)
+    .where(eq(restaurants.id, restaurantId))
+    .limit(1);
+
+  const restaurant = restaurantRows[0];
+  const avgTimePerParty = restaurant?.settings?.avgWaitTimePerParty || 15;
+
+  // Use a window function to compute positions in one query.
+  // Position is defined only for WAITING entries; others get 0.
   const entries = await db
-    .select()
+    .select({
+      entry: guestQueue,
+      position: sql`CASE WHEN ${guestQueue.status} = 'WAITING' THEN
+          row_number() OVER (PARTITION BY ${guestQueue.restaurantId} ORDER BY ${guestQueue.entryTime})
+        ELSE 0
+      END`.as("position"),
+    })
     .from(guestQueue)
     .where(
       and(
         eq(guestQueue.restaurantId, restaurantId),
-        Array.isArray(status) 
+        Array.isArray(status)
           ? inArray(guestQueue.status, status)
           : eq(guestQueue.status, status)
       )
@@ -168,20 +211,27 @@ export async function listQueue(restaurantId, filters = {}) {
     .limit(limit)
     .offset(offset);
 
-  // Add position and wait time for each entry
-  const entriesWithInfo = await Promise.all(
-    entries.map(async (entry) => {
-      const position = await getQueuePosition(restaurantId, entry.id);
-      const waitTime = await estimateWaitTime(restaurantId, position, entry.partySize);
-      return {
-        ...entry,
-        position,
-        estimatedWaitMinutes: waitTime,
-      };
-    })
-  );
+  // Add wait time locally (no additional DB queries)
+  return entries.map(({ entry, position }) => {
+    const pos = Number(position) || 0;
 
-  return entriesWithInfo;
+    // Same logic as estimateWaitTime(), but without the DB fetch:
+    // - if not waiting, 0
+    // - default 15 minutes per party ahead
+    // - multiplier for large parties
+    if (pos === 0) {
+      return { ...entry, position: 0, estimatedWaitMinutes: 0 };
+    }
+
+    const sizeMultiplier = entry.partySize > 4 ? 1.2 : 1.0;
+    const estimatedMinutes = Math.ceil((pos - 1) * avgTimePerParty * sizeMultiplier);
+
+    return {
+      ...entry,
+      position: pos,
+      estimatedWaitMinutes: Math.max(estimatedMinutes, 5),
+    };
+  });
 }
 
 /**

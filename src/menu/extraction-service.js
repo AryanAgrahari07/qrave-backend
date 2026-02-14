@@ -1,8 +1,5 @@
-import { createPgPool } from "../db.js";
-import { env } from "../config/env.js";
 import { enqueueJob } from "../jobs/redis-jobs.js";
-
-const pool = createPgPool(env.databaseUrl);
+import { pool } from "../dbClient.js";
 
 /**
  * Create a new extraction job

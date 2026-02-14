@@ -1,7 +1,4 @@
-import { createPgPool } from "../db.js";
-import { env } from "../config/env.js";
-
-const pool = createPgPool(env.databaseUrl);
+import { pool } from "../dbClient.js";
 
 export async function getTableStats(restaurantId) {
   const query = `

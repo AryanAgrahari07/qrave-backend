@@ -1,16 +1,12 @@
-import { eq, and } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/node-postgres";
+import { eq, and, inArray } from "drizzle-orm";
 import { tables } from "../../shared/schema.js";
-import { createPgPool } from "../db.js";
+import { db } from "../dbClient.js";
 import {
   emitTableCreated,
   emitTableDeleted,
   emitTableStatusChanged,
   emitTableUpdated,
 } from "../realtime/events.js";
-
-const pool = createPgPool();
-const db = drizzle(pool);
 
 /**
  * List all tables for a restaurant
@@ -26,30 +22,23 @@ export async function listTables(restaurantId) {
       )
     )
     .orderBy(tables.tableNumber);
-  
-  // Enrich with assigned waiter info
+
+  const waiterIds = Array.from(new Set(tablesList.map((t) => t.assignedWaiterId).filter(Boolean)));
+  if (waiterIds.length === 0) return tablesList;
+
+  // Batch fetch assigned waiter info (remove N+1)
   const { staff } = await import("../../shared/schema.js");
-  const tablesWithWaiter = await Promise.all(
-    tablesList.map(async (table) => {
-      if (!table.assignedWaiterId) return table;
-      
-      const waiterRows = await db
-        .select({
-          id: staff.id,
-          fullName: staff.fullName,
-        })
-        .from(staff)
-        .where(eq(staff.id, table.assignedWaiterId))
-        .limit(1);
-      
-      return {
-        ...table,
-        assignedWaiter: waiterRows[0] || null,
-      };
-    })
-  );
-  
-  return tablesWithWaiter;
+  const waiterRows = await db
+    .select({ id: staff.id, fullName: staff.fullName })
+    .from(staff)
+    .where(inArray(staff.id, waiterIds));
+
+  const waiterMap = new Map(waiterRows.map((w) => [w.id, w]));
+
+  return tablesList.map((table) => ({
+    ...table,
+    assignedWaiter: table.assignedWaiterId ? waiterMap.get(table.assignedWaiterId) || null : null,
+  }));
 }
 
 /**

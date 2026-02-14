@@ -1,10 +1,7 @@
-import { createPgPool } from '../db.js';
-import { env } from '../config/env.js';
+import { pool } from '../dbClient.js';
 import { extractMenuFromImage, calculateConfidence } from '../ai/gemini-client.js';
 import crypto from 'crypto';
 import sharp from 'sharp';
-
-const pool = createPgPool(env.databaseUrl);
 
 // Supported MIME types by Gemini
 const GEMINI_SUPPORTED_TYPES = [
