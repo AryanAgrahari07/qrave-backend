@@ -1,8 +1,5 @@
 import { createPresignedUploadUrl, publicFileUrl } from "../media/s3.js";
-import { createPgPool } from "../db.js";
-import { env } from "../config/env.js";
-
-const pool = createPgPool(env.databaseUrl);
+import { pool } from "../dbClient.js";
 
 // Helper to get full S3 URL for logo templates
 function getLogoUrl(s3Path) {

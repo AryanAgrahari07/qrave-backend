@@ -1,12 +1,8 @@
 import bcrypt from "bcryptjs";
-import { drizzle } from "drizzle-orm/node-postgres";
 import { users, restaurants, tables, menuCategories, staff } from "../../shared/schema.js";
-import { createPgPool } from "../db.js";
+import { db } from "../dbClient.js";
 import { env } from "../config/env.js";
 import { generateTableQR } from "../qr/service.js";
-
-const pool = createPgPool();
-const db = drizzle(pool);
 
 /**
  * Complete onboarding flow for a new restaurant

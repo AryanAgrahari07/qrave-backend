@@ -1,259 +1,358 @@
 import { pool } from "../dbClient.js";
+import { getTimeRanges } from "./range.js";
+import { getCached, setCached } from "./cache.js";
 
-export async function getRevenueData(restaurantId, timeframe) {
-  let query = "";
-  let params = [restaurantId];
-
-  switch (timeframe) {
-    case "day":
-      // Last 7 days grouped by day of week
-      query = `
-        SELECT 
-          TO_CHAR(DATE_TRUNC('day', paid_at), 'Dy') as name,
-          COALESCE(SUM(grand_total), 0) as total
-        FROM transactions
-        WHERE restaurant_id = $1
-          AND paid_at >= NOW() - INTERVAL '7 days'
-        GROUP BY DATE_TRUNC('day', paid_at), TO_CHAR(DATE_TRUNC('day', paid_at), 'Dy')
-        ORDER BY DATE_TRUNC('day', paid_at)
-      `;
-      break;
-
-    case "month":
-      // Last 4 weeks
-      query = `
-        SELECT 
-          'Week ' || EXTRACT(WEEK FROM paid_at)::text as name,
-          COALESCE(SUM(grand_total), 0) as total
-        FROM transactions
-        WHERE restaurant_id = $1
-          AND paid_at >= NOW() - INTERVAL '4 weeks'
-        GROUP BY EXTRACT(WEEK FROM paid_at)
-        ORDER BY EXTRACT(WEEK FROM paid_at)
-      `;
-      break;
-
-    case "quarter":
-      // Last 3 months
-      query = `
-        SELECT 
-          TO_CHAR(DATE_TRUNC('month', paid_at), 'Mon') as name,
-          COALESCE(SUM(grand_total), 0) as total
-        FROM transactions
-        WHERE restaurant_id = $1
-          AND paid_at >= NOW() - INTERVAL '3 months'
-        GROUP BY DATE_TRUNC('month', paid_at), TO_CHAR(DATE_TRUNC('month', paid_at), 'Mon')
-        ORDER BY DATE_TRUNC('month', paid_at)
-      `;
-      break;
-
-    case "year":
-      // Last 4 quarters
-      query = `
-        SELECT 
-          'Q' || EXTRACT(QUARTER FROM paid_at)::text as name,
-          COALESCE(SUM(grand_total), 0) as total
-        FROM transactions
-        WHERE restaurant_id = $1
-          AND paid_at >= NOW() - INTERVAL '1 year'
-        GROUP BY EXTRACT(QUARTER FROM paid_at)
-        ORDER BY EXTRACT(QUARTER FROM paid_at)
-      `;
-      break;
-
-    default:
-      query = `
-        SELECT 
-          TO_CHAR(DATE_TRUNC('day', paid_at), 'Dy') as name,
-          COALESCE(SUM(grand_total), 0) as total
-        FROM transactions
-        WHERE restaurant_id = $1
-          AND paid_at >= NOW() - INTERVAL '7 days'
-        GROUP BY DATE_TRUNC('day', paid_at), TO_CHAR(DATE_TRUNC('day', paid_at), 'Dy')
-        ORDER BY DATE_TRUNC('day', paid_at)
-      `;
-  }
-
-  const result = await pool.query(query, params);
-  return result.rows;
+function safeNumber(value) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
-export async function getTopDishes(restaurantId, timeframe) {
-  let interval = "7 days";
-  
-  switch (timeframe) {
-    case "day":
-      interval = "1 day";
-      break;
-    case "month":
-      interval = "30 days";
-      break;
-    case "quarter":
-      interval = "90 days";
-      break;
-    case "year":
-      interval = "365 days";
-      break;
+function pctChange(current, previous) {
+  const c = safeNumber(current);
+  const p = safeNumber(previous);
+  if (p === 0) return c === 0 ? 0 : 100;
+  return ((c - p) / p) * 100;
+}
+
+function formatHourLabel(h) {
+  const hour = ((h % 24) + 24) % 24;
+  if (hour === 0) return "12 AM";
+  if (hour === 12) return "12 PM";
+  if (hour < 12) return `${hour} AM`;
+  return `${hour - 12} PM`;
+}
+
+/**
+ * Revenue series for the selected period.
+ * Returns bucketed totals with a human-friendly label.
+ */
+export async function getRevenueSeries(restaurantId, timeframe, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
+
+  // Bucket by hour/day/week/month based on timeframe.
+  let bucketExpr = "DATE_TRUNC('day', paid_at)";
+  let labelExpr = "TO_CHAR(DATE_TRUNC('day', paid_at), 'Mon DD')";
+
+  if (ranges.bucket === "hour") {
+    bucketExpr = "DATE_TRUNC('hour', paid_at)";
+    labelExpr = "TO_CHAR(DATE_TRUNC('hour', paid_at), 'FMHH12AM')";
+  }
+  if (ranges.bucket === "week") {
+    bucketExpr = "DATE_TRUNC('week', paid_at)";
+    labelExpr = "'Week of ' || TO_CHAR(DATE_TRUNC('week', paid_at), 'Mon DD')";
+  }
+  if (ranges.bucket === "month") {
+    bucketExpr = "DATE_TRUNC('month', paid_at)";
+    labelExpr = "TO_CHAR(DATE_TRUNC('month', paid_at), 'Mon YYYY')";
   }
 
   const query = `
-    WITH item_stats AS (
-      SELECT 
-        oi.item_name as name,
-        SUM(oi.quantity) as orders,
-        LAG(SUM(oi.quantity)) OVER (PARTITION BY oi.item_name ORDER BY DATE_TRUNC('week', o.created_at)) as prev_orders
-      FROM order_items oi
-      JOIN orders o ON o.id = oi.order_id
-      WHERE oi.restaurant_id = $1
-        AND o.created_at >= NOW() - INTERVAL '${interval}'
-        AND o.status != 'CANCELLED'
-      GROUP BY oi.item_name, DATE_TRUNC('week', o.created_at)
-    )
-    SELECT 
-      name,
-      SUM(orders) as orders,
-      CASE 
-        WHEN AVG(orders) > AVG(COALESCE(prev_orders, 0)) THEN 'up'
-        ELSE 'down'
-      END as trend
-    FROM item_stats
-    GROUP BY name
-    ORDER BY SUM(orders) DESC
-    LIMIT 4
-  `;
-
-  const result = await pool.query(query, [restaurantId]);
-  return result.rows;
-}
-
-export async function getPeakHours(restaurantId) {
-  const query = `
-    SELECT 
-      EXTRACT(HOUR FROM created_at) as hour,
-      COUNT(*) as count
-    FROM orders
+    SELECT
+      ${labelExpr} as name,
+      COALESCE(SUM(grand_total), 0) as total
+    FROM transactions
     WHERE restaurant_id = $1
-      AND created_at >= NOW() - INTERVAL '7 days'
-      AND status != 'CANCELLED'
-    GROUP BY EXTRACT(HOUR FROM created_at)
-    ORDER BY count DESC
-    LIMIT 1
+      AND paid_at >= $2
+      AND paid_at < $3
+    GROUP BY ${bucketExpr}
+    ORDER BY ${bucketExpr}
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  
-  if (result.rows.length === 0) {
-    return { startHour: 19, endHour: 21 }; // Default to 7 PM - 9 PM
-  }
+  const result = await pool.query(query, [
+    restaurantId,
+    ranges.current.start,
+    ranges.current.end,
+  ]);
 
-  const peakHour = parseInt(result.rows[0].hour);
   return {
-    startHour: peakHour,
-    endHour: peakHour + 2
+    timeframe,
+    bucket: ranges.bucket,
+    start: ranges.current.start,
+    end: ranges.current.end,
+    points: result.rows.map((r) => ({
+      name: r.name,
+      total: safeNumber(r.total),
+    })),
   };
 }
 
-export async function getAverageOrderValue(restaurantId) {
-  const query = `
-    SELECT 
-      COALESCE(AVG(total_amount), 0) as avg_value,
-      COALESCE(
-        (AVG(total_amount) - AVG(prev_total)) / NULLIF(AVG(prev_total), 0) * 100,
-        0
-      ) as growth_percent
-    FROM (
-      SELECT 
-        total_amount,
-        LAG(total_amount) OVER (ORDER BY created_at) as prev_total
-      FROM orders
-      WHERE restaurant_id = $1
-        AND created_at >= NOW() - INTERVAL '30 days'
-        AND status = 'PAID'
-    ) subq
-  `;
+export async function getRevenueKpis(restaurantId, timeframe, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
 
-  const result = await pool.query(query, [restaurantId]);
-  return result.rows[0] || { avg_value: 0, growth_percent: 0 };
-}
-
-export async function getTableTurnover(restaurantId) {
   const query = `
-    SELECT 
-      AVG(EXTRACT(EPOCH FROM (closed_at - created_at)) / 60) as avg_minutes
-    FROM orders
+    SELECT
+      COALESCE(SUM(grand_total), 0) as revenue,
+      COUNT(*)::int as bills
+    FROM transactions
     WHERE restaurant_id = $1
-      AND closed_at IS NOT NULL
-      AND created_at >= NOW() - INTERVAL '7 days'
-      AND order_type = 'DINE_IN'
+      AND paid_at >= $2 AND paid_at < $3
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  return Math.round(result.rows[0]?.avg_minutes || 48);
+  const [cur, prev] = await Promise.all([
+    pool.query(query, [restaurantId, ranges.current.start, ranges.current.end]),
+    pool.query(query, [restaurantId, ranges.previous.start, ranges.previous.end]),
+  ]);
+
+  const curRow = cur.rows[0] || { revenue: 0, bills: 0 };
+  const prevRow = prev.rows[0] || { revenue: 0, bills: 0 };
+
+  const revenue = safeNumber(curRow.revenue);
+  const prevRevenue = safeNumber(prevRow.revenue);
+
+  const bills = safeNumber(curRow.bills);
+  const prevBills = safeNumber(prevRow.bills);
+
+  const aov = bills > 0 ? revenue / bills : 0;
+  const prevAov = prevBills > 0 ? prevRevenue / prevBills : 0;
+
+  return {
+    revenue,
+    revenueChangePercent: pctChange(revenue, prevRevenue),
+    paidOrders: bills,
+    paidOrdersChangePercent: pctChange(bills, prevBills),
+    avgOrderValue: aov,
+    avgOrderValueChangePercent: pctChange(aov, prevAov),
+  };
 }
 
-export async function getSalesByCategory(restaurantId) {
+export async function getTopItems(restaurantId, timeframe, limit = 5, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
+
   const query = `
-    SELECT 
-      mc.name,
-      COUNT(oi.id) as value
+    WITH cur AS (
+      SELECT
+        oi.item_name as name,
+        COALESCE(SUM(oi.quantity), 0)::int as qty,
+        COALESCE(SUM(oi.total_price), 0) as revenue
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.restaurant_id = $1
+        AND o.status != 'CANCELLED'
+        AND o.created_at >= $2 AND o.created_at < $3
+      GROUP BY oi.item_name
+    ),
+    prev AS (
+      SELECT
+        oi.item_name as name,
+        COALESCE(SUM(oi.quantity), 0)::int as qty
+      FROM order_items oi
+      JOIN orders o ON o.id = oi.order_id
+      WHERE oi.restaurant_id = $1
+        AND o.status != 'CANCELLED'
+        AND o.created_at >= $4 AND o.created_at < $5
+      GROUP BY oi.item_name
+    )
+    SELECT
+      cur.name,
+      cur.qty as orders,
+      cur.revenue,
+      COALESCE(prev.qty, 0)::int as prev_orders
+    FROM cur
+    LEFT JOIN prev ON prev.name = cur.name
+    ORDER BY cur.qty DESC
+    LIMIT ${Number(limit) || 5}
+  `;
+
+  const result = await pool.query(query, [
+    restaurantId,
+    ranges.current.start,
+    ranges.current.end,
+    ranges.previous.start,
+    ranges.previous.end,
+  ]);
+
+  return result.rows.map((r) => {
+    const orders = safeNumber(r.orders);
+    const prevOrders = safeNumber(r.prev_orders);
+    return {
+      name: r.name,
+      orders,
+      revenue: safeNumber(r.revenue),
+      trend: orders >= prevOrders ? "up" : "down",
+      changePercent: pctChange(orders, prevOrders),
+    };
+  });
+}
+
+export async function getCategoryBreakdown(restaurantId, timeframe, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
+
+  const query = `
+    SELECT
+      mc.name as name,
+      COALESCE(SUM(oi.total_price), 0) as revenue,
+      COALESCE(SUM(oi.quantity), 0)::int as items
     FROM order_items oi
     JOIN menu_items mi ON mi.id = oi.menu_item_id
     JOIN menu_categories mc ON mc.id = mi.category_id
     JOIN orders o ON o.id = oi.order_id
     WHERE oi.restaurant_id = $1
-      AND o.created_at >= NOW() - INTERVAL '30 days'
       AND o.status != 'CANCELLED'
+      AND o.created_at >= $2 AND o.created_at < $3
     GROUP BY mc.name
-    ORDER BY value DESC
+    ORDER BY revenue DESC
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  return result.rows;
+  const result = await pool.query(query, [
+    restaurantId,
+    ranges.current.start,
+    ranges.current.end,
+  ]);
+
+  const rows = result.rows.map((r) => ({
+    name: r.name,
+    revenue: safeNumber(r.revenue),
+    items: safeNumber(r.items),
+  }));
+
+  const total = rows.reduce((acc, r) => acc + r.revenue, 0);
+
+  return rows.map((r) => ({
+    ...r,
+    sharePercent: total > 0 ? (r.revenue / total) * 100 : 0,
+  }));
 }
 
-export async function getTrafficVolume(restaurantId) {
+export async function getTrafficByHour(restaurantId, timeframe, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
+
   const query = `
-    SELECT 
-      TO_CHAR(created_at, 'FMHH12AM') as hour,
-      COUNT(*) as count
+    SELECT
+      EXTRACT(HOUR FROM created_at)::int as hour,
+      COUNT(*)::int as count
     FROM orders
     WHERE restaurant_id = $1
-      AND created_at >= NOW() - INTERVAL '7 days'
       AND status != 'CANCELLED'
-    GROUP BY EXTRACT(HOUR FROM created_at), TO_CHAR(created_at, 'FMHH12AM')
+      AND created_at >= $2 AND created_at < $3
+    GROUP BY EXTRACT(HOUR FROM created_at)
     ORDER BY EXTRACT(HOUR FROM created_at)
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  return result.rows;
-}
-
-export async function getAnalyticsSummary(restaurantId, timeframe) {
-  const [
-    revenueData,
-    topDishes,
-    peakHours,
-    avgOrderValue,
-    tableTurnover,
-    salesByCategory,
-    trafficVolume
-  ] = await Promise.all([
-    getRevenueData(restaurantId, timeframe),
-    getTopDishes(restaurantId, timeframe),
-    getPeakHours(restaurantId),
-    getAverageOrderValue(restaurantId),
-    getTableTurnover(restaurantId),
-    getSalesByCategory(restaurantId),
-    getTrafficVolume(restaurantId)
+  const result = await pool.query(query, [
+    restaurantId,
+    ranges.current.start,
+    ranges.current.end,
   ]);
 
+  const map = new Map(result.rows.map((r) => [Number(r.hour), safeNumber(r.count)]));
+  const hours = Array.from({ length: 24 }, (_, h) => ({
+    hour: formatHourLabel(h),
+    hour24: h,
+    count: map.get(h) ?? 0,
+  }));
+
+  const peak = hours.reduce((best, cur) => (cur.count > best.count ? cur : best), hours[0]);
+
   return {
-    revenueData,
-    topDishes,
-    peakHours,
-    avgOrderValue,
-    tableTurnover,
-    salesByCategory,
-    trafficVolume
+    hours,
+    peakHours: {
+      startHour: peak.hour24,
+      endHour: (peak.hour24 + 2) % 24,
+    },
+  };
+}
+
+export async function getTableTurnoverMinutes(restaurantId, timeframe, opts) {
+  const ranges = getTimeRanges(timeframe, new Date(), opts);
+
+  const query = `
+    SELECT
+      AVG(EXTRACT(EPOCH FROM (closed_at - created_at)) / 60) as avg_minutes
+    FROM orders
+    WHERE restaurant_id = $1
+      AND order_type = 'DINE_IN'
+      AND closed_at IS NOT NULL
+      AND status != 'CANCELLED'
+      AND created_at >= $2 AND created_at < $3
+  `;
+
+  const result = await pool.query(query, [
+    restaurantId,
+    ranges.current.start,
+    ranges.current.end,
+  ]);
+
+  const avg = safeNumber(result.rows[0]?.avg_minutes);
+  return Math.round(avg || 0);
+}
+
+/**
+ * New analytics payload optimized for dashboards.
+ */
+export async function getAnalyticsOverview(restaurantId, timeframe, opts) {
+  // Minimal guard
+  const tf = ['day', 'month', 'quarter', 'year'].includes(timeframe) ? timeframe : 'day';
+
+  // Cache by restaurant + timeframe + current-range start (so it naturally rolls forward)
+  const ranges = getTimeRanges(tf, new Date(), opts);
+  const cacheKey = `analytics:overview:${restaurantId}:${tf}:${ranges.current.start.toISOString()}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  const [kpis, revenueSeries, topItems, categoryBreakdown, traffic, tableTurnover] =
+    await Promise.all([
+      getRevenueKpis(restaurantId, tf, opts),
+      getRevenueSeries(restaurantId, tf, opts),
+      getTopItems(restaurantId, tf, 5, opts),
+      getCategoryBreakdown(restaurantId, tf, opts),
+      getTrafficByHour(restaurantId, tf, opts),
+      getTableTurnoverMinutes(restaurantId, tf, opts),
+    ]);
+
+  const payload = {
+    timeframe: tf,
+    range: {
+      start: ranges.current.start,
+      end: ranges.current.end,
+      previousStart: ranges.previous.start,
+      previousEnd: ranges.previous.end,
+    },
+    kpis: {
+      ...kpis,
+      tableTurnoverMinutes: tableTurnover,
+    },
+    revenueSeries,
+    topItems,
+    categoryBreakdown,
+    trafficVolume: traffic.hours,
+    peakHours: traffic.peakHours,
+  };
+
+  // 30s TTL by default (dashboard polls every 60s in the frontend)
+  setCached(cacheKey, payload, 30_000);
+  return payload;
+}
+
+// Backwards-compatible endpoint used by current UI.
+export async function getAnalyticsSummary(restaurantId, timeframe, opts) {
+  const overview = await getAnalyticsOverview(restaurantId, timeframe, opts);
+
+  return {
+    revenueData: overview.revenueSeries.points,
+    topDishes: overview.topItems.map((i) => ({
+      name: i.name,
+      orders: i.orders,
+      trend: i.trend,
+    })),
+    peakHours: overview.peakHours,
+    avgOrderValue: {
+      avg_value: overview.kpis.avgOrderValue,
+      growth_percent: overview.kpis.avgOrderValueChangePercent,
+    },
+    tableTurnover: overview.kpis.tableTurnoverMinutes,
+    // Old UI expects {name,value}; we map revenue to value.
+    salesByCategory: overview.categoryBreakdown.map((c) => ({
+      name: c.name,
+      value: Math.round(c.revenue),
+    })),
+    trafficVolume: overview.trafficVolume.map((h) => ({
+      hour: h.hour,
+      count: h.count,
+    })),
+
+    // Extra fields (safe for clients that ignore unknown keys)
+    totalRevenue: overview.kpis.revenue,
+    revenueChangePercent: overview.kpis.revenueChangePercent,
+    paidOrders: overview.kpis.paidOrders,
   };
 }

@@ -1,4 +1,5 @@
 import { pool } from "../dbClient.js";
+import { getTimeRanges } from "../analytics/range.js";
 
 export async function getTableStats(restaurantId) {
   const query = `
@@ -26,37 +27,59 @@ export async function getTableStats(restaurantId) {
 }
 
 export async function getOrderStats(restaurantId) {
+  // Today window should be timezone-aware (same as analytics)
+  const today = getTimeRanges('day');
+
   const query = `
     SELECT 
       COUNT(*) as total_orders,
       COUNT(*) FILTER (WHERE status = 'PENDING') as pending_orders,
       COUNT(*) FILTER (WHERE status = 'PREPARING') as preparing_orders,
       COUNT(*) FILTER (WHERE status = 'SERVED') as served_orders,
-      COUNT(*) FILTER (WHERE status = 'PAID') as paid_orders,
-      COALESCE(SUM(total_amount) FILTER (WHERE status = 'PAID'), 0) as total_revenue,
-      COALESCE(AVG(total_amount) FILTER (WHERE status = 'PAID'), 0) as avg_order_value
+      COUNT(*) FILTER (WHERE status = 'PAID') as paid_orders
     FROM orders
     WHERE restaurant_id = $1
-      AND created_at >= CURRENT_DATE
+      AND created_at >= $2
+      AND created_at < $3
       AND status != 'CANCELLED'
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  const stats = result.rows[0];
-  
+  // Revenue should come from transactions (actual paid bills)
+  const revenueQuery = `
+    SELECT
+      COALESCE(SUM(grand_total), 0) as total_revenue,
+      COUNT(*)::int as paid_orders,
+      COALESCE(AVG(grand_total), 0) as avg_order_value
+    FROM transactions
+    WHERE restaurant_id = $1
+      AND paid_at >= $2
+      AND paid_at < $3
+  `;
+
+  const [ordersResult, revenueResult] = await Promise.all([
+    pool.query(query, [restaurantId, today.current.start, today.current.end]),
+    pool.query(revenueQuery, [restaurantId, today.current.start, today.current.end]),
+  ]);
+
+  const stats = ordersResult.rows[0] || {};
+  const rev = revenueResult.rows[0] || {};
+
   return {
     totalOrders: parseInt(stats.total_orders) || 0,
     pendingOrders: parseInt(stats.pending_orders) || 0,
     preparingOrders: parseInt(stats.preparing_orders) || 0,
     servedOrders: parseInt(stats.served_orders) || 0,
-    paidOrders: parseInt(stats.paid_orders) || 0,
-    totalRevenue: parseFloat(stats.total_revenue).toFixed(2),
-    avgOrderValue: parseFloat(stats.avg_order_value).toFixed(2)
+    // Prefer transaction count for paid orders, fallback to orders.status
+    paidOrders: Number.isFinite(Number(rev.paid_orders)) ? parseInt(rev.paid_orders) : (parseInt(stats.paid_orders) || 0),
+    totalRevenue: parseFloat(rev.total_revenue || 0).toFixed(2),
+    avgOrderValue: parseFloat(rev.avg_order_value || 0).toFixed(2),
   };
 }
 
 export async function getQueueStats(restaurantId) {
   try {
+    const today = getTimeRanges('day');
+
     const query = `
       SELECT 
         COUNT(*) as total_waiting,
@@ -67,12 +90,13 @@ export async function getQueueStats(restaurantId) {
         ) FILTER (WHERE seated_time IS NOT NULL), 0) as avg_wait_time
       FROM guest_queue
       WHERE restaurant_id = $1
-        AND entry_time >= CURRENT_DATE
+        AND entry_time >= $2
+        AND entry_time < $3
     `;
 
-    const result = await pool.query(query, [restaurantId]);
+    const result = await pool.query(query, [restaurantId, today.current.start, today.current.end]);
     const stats = result.rows[0];
-    
+
     return {
       totalWaiting: parseInt(stats.currently_waiting) || 0,
       seatedToday: parseInt(stats.seated_today) || 0,
@@ -90,24 +114,31 @@ export async function getQueueStats(restaurantId) {
 }
 
 export async function getWeeklyScanActivity(restaurantId) {
+  // Last 7 days window (timezone-aware start-of-today minus 7 days)
+  const today = getTimeRanges('day');
+  const end = today.current.end;
+  const start = new Date(today.current.start);
+  start.setUTCDate(start.getUTCDate() - 6); // include today + 6 previous days
+
   const query = `
     SELECT 
       TO_CHAR(DATE_TRUNC('day', created_at), 'Dy') as name,
       COUNT(*) as scans
     FROM orders
     WHERE restaurant_id = $1
-      AND created_at >= CURRENT_DATE - INTERVAL '7 days'
+      AND created_at >= $2
+      AND created_at < $3
       AND order_type = 'DINE_IN'
     GROUP BY DATE_TRUNC('day', created_at), TO_CHAR(DATE_TRUNC('day', created_at), 'Dy')
     ORDER BY DATE_TRUNC('day', created_at)
   `;
 
-  const result = await pool.query(query, [restaurantId]);
-  
+  const result = await pool.query(query, [restaurantId, start, end]);
+
   // Fill in missing days with 0 scans
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const scanMap = new Map(result.rows.map(r => [r.name, parseInt(r.scans)]));
-  
+
   return days.map(name => ({
     name,
     scans: scanMap.get(name) || 0
