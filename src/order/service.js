@@ -332,6 +332,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     notes,
     paymentMethod = "DUE",
     paymentStatus = "DUE",
+    waiveServiceCharge = false,
   } = data;
 
   // ✅ FIX: Only reuse order if it's OPEN (is_closed = false)
@@ -359,26 +360,56 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
     const existing = existingRows[0];
     if (existing) {
       console.log("🔄 Found OPEN order for table, adding items to it:", existing.id);
-      
+
+      // ✅ If caller provided a staff assignment (admin selected waiter),
+      // update the existing open order so it becomes assigned to that waiter.
+      // This is important for Waiter Terminal filtering/notifications.
+      const shouldUpdateAssignment = placedByStaffId && existing.placedByStaffId !== placedByStaffId;
+
       // Optionally enrich guest info if provided
-      if ((guestName && !existing.guestName) || (guestPhone && !existing.guestPhone) || notes) {
+      if (
+        (guestName && !existing.guestName) ||
+        (guestPhone && !existing.guestPhone) ||
+        notes ||
+        shouldUpdateAssignment
+      ) {
         await db
           .update(orders)
           .set({
             guestName: existing.guestName ?? (guestName || null),
             guestPhone: existing.guestPhone ?? (guestPhone || null),
             notes: notes ?? existing.notes,
+            placedByStaffId: shouldUpdateAssignment ? placedByStaffId : existing.placedByStaffId,
             updatedAt: new Date(),
           })
           .where(eq(orders.id, existing.id));
+
+        // Also mirror assignment onto the table if applicable
+        if (shouldUpdateAssignment) {
+          try {
+            await db
+              .update(tables)
+              .set({ assignedWaiterId: placedByStaffId, updatedAt: new Date() })
+              .where(and(eq(tables.restaurantId, restaurantId), eq(tables.id, tableId)));
+          } catch (err) {
+            console.error("Failed to update table assignment for existing order:", err);
+          }
+        }
       }
 
       // Add items to existing order (this will handle payment status properly)
-      const { order: updatedOrder } = await addOrderItems(restaurantId, existing.id, items, paymentMethod, paymentStatus);
-      
+      const { order: updatedOrder } = await addOrderItems(
+        restaurantId,
+        existing.id,
+        items,
+        paymentMethod,
+        paymentStatus,
+      );
+
       console.log("✅ Items added to existing OPEN order. Payment status:", updatedOrder.paymentStatus);
-      
-      return updatedOrder;
+
+      // Return enriched order so UI has placedByStaff info.
+      return await getOrder(restaurantId, existing.id);
     } else {
       console.log("📝 No open order found for table, creating new order");
     }
@@ -402,7 +433,11 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
   const serviceRate = restaurant ? parseFloat(restaurant.taxRateService) / 100 : 0.1;
 
   const gstAmount = subtotal * gstRate;
-  const serviceTaxAmount = subtotal * serviceRate;
+
+  // Service charge applies ONLY for dine-in orders, and can be waived per-order.
+  const serviceTaxAmount =
+    orderType === "DINE_IN" && !waiveServiceCharge ? subtotal * serviceRate : 0;
+
   const totalAmount = subtotal + gstAmount + serviceTaxAmount;
   
   console.log("-----");
@@ -840,18 +875,73 @@ export async function updateOrderStatus(restaurantId, orderId, status) {
  * @returns {Promise<object|null>} Updated order
  */
 export async function updateOrder(restaurantId, orderId, data) {
+  const existing = await getOrder(restaurantId, orderId);
+  if (!existing) return null;
+
+  const updateData = { ...data };
+
+  // If discountAmount is provided, recalculate totals + payment status based on existing subtotal/taxes.
+  if (data.discountAmount !== undefined) {
+    let discount = Number(data.discountAmount);
+    if (!Number.isFinite(discount)) discount = 0;
+    discount = Math.max(0, discount);
+
+    const subtotal = parseFloat(existing.subtotalAmount || "0");
+    const gst = parseFloat(existing.gstAmount || "0");
+    const service = parseFloat(existing.serviceTaxAmount || "0");
+
+    const totalBeforeDiscount = subtotal + gst + service;
+    discount = Math.min(discount, totalBeforeDiscount);
+
+    const newTotal = Math.max(0, totalBeforeDiscount - discount);
+
+    updateData.discountAmount = discount.toFixed(2);
+    updateData.totalAmount = newTotal.toFixed(2);
+
+    // Re-evaluate payment status in case discount changes outstanding amount.
+    let paidAmount = parseFloat(existing.paid_amount || "0");
+    let paymentStatus = existing.paymentStatus;
+
+    if (paidAmount >= newTotal - 0.01) {
+      paymentStatus = "PAID";
+      paidAmount = newTotal;
+    } else if (paidAmount > 0) {
+      paymentStatus = "PARTIALLY_PAID";
+    } else {
+      paymentStatus = "DUE";
+    }
+
+    updateData.paymentStatus = paymentStatus;
+    updateData.paid_amount = paidAmount.toFixed(2);
+
+    // If a transaction already exists, keep it in sync.
+    const existingTransactionRows = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.orderId, orderId))
+      .limit(1);
+    const existingTransaction = existingTransactionRows[0];
+    if (existingTransaction) {
+      await db
+        .update(transactions)
+        .set({
+          subtotal: subtotal.toFixed(2),
+          gstAmount: gst.toFixed(2),
+          serviceTaxAmount: service.toFixed(2),
+          discountAmount: discount.toFixed(2),
+          grandTotal: newTotal.toFixed(2),
+        })
+        .where(eq(transactions.id, existingTransaction.id));
+    }
+  }
+
   const rows = await db
     .update(orders)
     .set({
-      ...data,
+      ...updateData,
       updatedAt: new Date(),
     })
-    .where(
-      and(
-        eq(orders.restaurantId, restaurantId),
-        eq(orders.id, orderId)
-      )
-    )
+    .where(and(eq(orders.restaurantId, restaurantId), eq(orders.id, orderId)))
     .returning();
 
   const updated = rows[0] || null;
@@ -859,6 +949,92 @@ export async function updateOrder(restaurantId, orderId, data) {
     emitOrderUpdated(restaurantId, updated);
   }
   return updated;
+}
+
+/**
+ * Remove service charge (serviceTaxAmount) from an order and recompute totals.
+ *
+ * This is used by the bill preview to let staff waive service charges for a specific order.
+ */
+export async function removeServiceChargeFromOrder(restaurantId, orderId) {
+  const existing = await getOrder(restaurantId, orderId);
+  if (!existing) {
+    throw new Error("Order not found");
+  }
+
+  if (existing.orderType !== "DINE_IN") {
+    throw new Error("Service charge can only be removed for dine-in orders");
+  }
+
+  const subtotal = parseFloat(existing.subtotalAmount || "0");
+  const gst = parseFloat(existing.gstAmount || "0");
+
+  // Keep existing discount amount, but clamp it to the new total before discount.
+  let discount = parseFloat(existing.discountAmount || "0");
+  if (!Number.isFinite(discount)) discount = 0;
+  discount = Math.max(0, discount);
+
+  const service = 0;
+  const totalBeforeDiscount = subtotal + gst + service;
+  discount = Math.min(discount, totalBeforeDiscount);
+
+  const newTotal = Math.max(0, totalBeforeDiscount - discount);
+
+  // Re-evaluate payment status to keep outstanding amount correct.
+  let paidAmount = parseFloat(existing.paid_amount || "0");
+  let paymentStatus = existing.paymentStatus;
+
+  if (paidAmount >= newTotal - 0.01) {
+    paymentStatus = "PAID";
+    paidAmount = newTotal;
+  } else if (paidAmount > 0) {
+    paymentStatus = "PARTIALLY_PAID";
+  } else {
+    paymentStatus = "DUE";
+  }
+
+  // Update order
+  const rows = await db
+    .update(orders)
+    .set({
+      serviceTaxAmount: service.toFixed(2),
+      discountAmount: discount.toFixed(2),
+      totalAmount: newTotal.toFixed(2),
+      paymentStatus,
+      paid_amount: paidAmount.toFixed(2),
+      updatedAt: new Date(),
+    })
+    .where(and(eq(orders.restaurantId, restaurantId), eq(orders.id, orderId)))
+    .returning();
+
+  const updated = rows[0] || null;
+  if (!updated) return null;
+
+  // Sync any existing transaction (if order was already paid / has transaction).
+  const existingTransactionRows = await db
+    .select()
+    .from(transactions)
+    .where(eq(transactions.orderId, orderId))
+    .limit(1);
+  const existingTransaction = existingTransactionRows[0];
+
+  if (existingTransaction) {
+    await db
+      .update(transactions)
+      .set({
+        subtotal: subtotal.toFixed(2),
+        gstAmount: gst.toFixed(2),
+        serviceTaxAmount: service.toFixed(2),
+        discountAmount: discount.toFixed(2),
+        grandTotal: newTotal.toFixed(2),
+      })
+      .where(eq(transactions.id, existingTransaction.id));
+  }
+
+  emitOrderUpdated(restaurantId, updated);
+
+  // Return enriched order for immediate UI refresh.
+  return getOrder(restaurantId, orderId);
 }
 
 /**
@@ -1177,11 +1353,34 @@ export async function addOrderItems(restaurantId, orderId, items, paymentMethod 
   const serviceRate = restaurant[0] ? parseFloat(restaurant[0].taxRateService) / 100 : 0.1;
 
   const newGst = newSubtotal * gstRate;
-  const newService = newSubtotal * serviceRate;
-  const newTotal = newSubtotal + newGst + newService;
+
+  // Preserve per-order waiver: if service charge is currently 0 despite positive subtotal and non-zero service rate,
+  // treat it as waived and keep it at 0 when adding items.
+  const currentSubtotal = parseFloat(order.subtotalAmount || "0");
+  const currentService = parseFloat(order.serviceTaxAmount || "0");
+  const wasServiceChargeWaived =
+    order.orderType === "DINE_IN" && serviceRate > 0 && currentSubtotal > 0 && currentService === 0;
+
+  // Service charge applies ONLY for dine-in orders.
+  const newService =
+    order.orderType === "DINE_IN" && !wasServiceChargeWaived
+      ? newSubtotal * serviceRate
+      : 0;
+
+  // Apply existing discountAmount on the order (discount reduces the grand total, after taxes).
+  let discount = parseFloat(order.discountAmount || "0");
+  if (!Number.isFinite(discount)) discount = 0;
+  discount = Math.max(0, discount);
+
+  const totalBeforeDiscount = newSubtotal + newGst + newService;
+  discount = Math.min(discount, totalBeforeDiscount);
+
+  const newTotal = Math.max(0, totalBeforeDiscount - discount);
 
   // ✅ CRITICAL: Calculate taxes on ONLY the new items
-  const additionalTotalWithTax = additionalTotal + (additionalTotal * gstRate) + (additionalTotal * serviceRate);
+  const additionalService =
+    order.orderType === "DINE_IN" && !wasServiceChargeWaived ? additionalTotal * serviceRate : 0;
+  const additionalTotalWithTax = additionalTotal + (additionalTotal * gstRate) + additionalService;
 
   // ✅ FIX: Handle payment for new items
   let updatedPaidAmount = parseFloat(order.paid_amount || "0");
@@ -1239,6 +1438,7 @@ export async function addOrderItems(restaurantId, orderId, items, paymentMethod 
       subtotalAmount: newSubtotal.toFixed(2),
       gstAmount: newGst.toFixed(2),
       serviceTaxAmount: newService.toFixed(2),
+      discountAmount: discount.toFixed(2),
       totalAmount: newTotal.toFixed(2),
       paid_amount: updatedPaidAmount.toFixed(2),
       paymentStatus: newPaymentStatus,
@@ -1271,6 +1471,7 @@ export async function addOrderItems(restaurantId, orderId, items, paymentMethod 
           subtotal: newSubtotal.toFixed(2),
           gstAmount: newGst.toFixed(2),
           serviceTaxAmount: newService.toFixed(2),
+          discountAmount: discount.toFixed(2),
           paidAt: new Date(),
         })
         .where(eq(transactions.id, existingTransaction.id));
@@ -1363,8 +1564,28 @@ export async function removeOrderItem(restaurantId, orderId, orderItemId) {
   const serviceRate = restaurant[0] ? parseFloat(restaurant[0].taxRateService) / 100 : 0.1;
 
   const newGst = newSubtotal * gstRate;
-  const newService = newSubtotal * serviceRate;
-  const newTotal = newSubtotal + newGst + newService;
+
+  // Preserve per-order waiver: if service charge is currently 0 despite positive subtotal and non-zero service rate,
+  // treat it as waived and keep it at 0 when adding items.
+  const currentSubtotal = parseFloat(order.subtotalAmount || "0");
+  const currentService = parseFloat(order.serviceTaxAmount || "0");
+  const wasServiceChargeWaived =
+    order.orderType === "DINE_IN" && serviceRate > 0 && currentSubtotal > 0 && currentService === 0;
+
+  // Service charge applies ONLY for dine-in orders.
+  const newService =
+    order.orderType === "DINE_IN" && !wasServiceChargeWaived
+      ? newSubtotal * serviceRate
+      : 0;
+
+  // Preserve and apply existing discount.
+  let discount = parseFloat(order.discountAmount || "0");
+  if (!Number.isFinite(discount)) discount = 0;
+  discount = Math.max(0, discount);
+
+  const totalBeforeDiscount = newSubtotal + newGst + newService;
+  discount = Math.min(discount, totalBeforeDiscount);
+  const newTotal = Math.max(0, totalBeforeDiscount - discount);
 
   // Update order totals
   await db
@@ -1373,6 +1594,7 @@ export async function removeOrderItem(restaurantId, orderId, orderItemId) {
       subtotalAmount: newSubtotal.toFixed(2),
       gstAmount: newGst.toFixed(2),
       serviceTaxAmount: newService.toFixed(2),
+      discountAmount: discount.toFixed(2),
       totalAmount: newTotal.toFixed(2),
       updatedAt: new Date(),
     })

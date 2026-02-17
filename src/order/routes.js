@@ -19,6 +19,7 @@ import {
   cancelOrderWithReason,
   closeOrder, // ✅ NEW
   listCancelledOrdersSummary,
+  removeServiceChargeFromOrder,
 } from "./service.js";
 
 const router = express.Router({ mergeParams: true });
@@ -42,6 +43,8 @@ const createOrderSchema = z.object({
   assignedWaiterId: z.string().uuid().optional(),
   paymentMethod: z.enum(["CASH", "CARD", "UPI", "DUE"]).optional().default("DUE"), 
   paymentStatus: z.enum(["PAID", "DUE", "PARTIALLY_PAID"]).optional().default("DUE"),
+  // If true, service charge will not be applied for this order (dine-in only).
+  waiveServiceCharge: z.boolean().optional().default(false),
 });
 
 const updateOrderStatusSchema = z.object({
@@ -125,7 +128,9 @@ export function registerOrderRoutes(app) {
         const { assignedWaiterId, ...orderData } = parsed.data;
         const order = await createOrder(restaurantId, orderData, placedByStaffId);
         
-        if (parsed.data.tableId && placedByStaffId && (req.user?.role === "WAITER" || req.user?.role === "ADMIN")) {
+        // If a waiter was selected for this order (admin placing order, or waiter placing on their own),
+        // mirror that assignment onto the table so Floor Map shows the waiter name.
+        if (parsed.data.tableId && placedByStaffId) {
           try {
             const { assignWaiterToTable } = await import("../table/service.js");
             await assignWaiterToTable(restaurantId, parsed.data.tableId, placedByStaffId);
@@ -535,6 +540,30 @@ export function registerOrderRoutes(app) {
         console.error("Payment status update error:", error);
         res.status(400).json({
           message: error.message || "Failed to update payment status",
+        });
+      }
+    })
+  );
+
+  // Remove service charge for an order
+  router.patch(
+    "/:orderId/service-charge/remove",
+    requireRole("owner", "admin", "platform_admin", "WAITER"),
+    rateLimit({ keyPrefix: "orders:service-charge:remove", windowSeconds: 60, max: 200 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId, orderId } = req.params;
+
+      try {
+        const order = await removeServiceChargeFromOrder(restaurantId, orderId);
+        if (!order) {
+          return res.status(404).json({ message: "Order not found" });
+        }
+
+        res.json({ order, message: "Service charge removed" });
+      } catch (error) {
+        console.error("Remove service charge error:", error);
+        res.status(400).json({
+          message: error.message || "Failed to remove service charge",
         });
       }
     })
