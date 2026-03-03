@@ -2,12 +2,23 @@ import express from "express";
 import passport from "passport";
 import { z } from "zod";
 import { configurePassport, signJwt } from "./passport.js";
-import { createUser, findUserByEmail } from "./service.js";
+import { createUser, findUserByEmail, findUserById } from "./service.js";
 import { env } from "../config/env.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { rateLimit } from "../middleware/rateLimit.js";
+import { requireAuth } from "../middleware/auth.js";
 import bcrypt from "bcryptjs";
 import { pool } from "../dbClient.js";
+import {
+  clearRefreshCookie,
+  createRefreshTokenValue,
+  findValidRefreshToken,
+  parseCookies,
+  persistRefreshToken,
+  revokeRefreshTokenById,
+  revokeRefreshTokenValue,
+  setRefreshCookie,
+} from "./refreshTokens.js";
 
 const router = express.Router();
 
@@ -55,7 +66,20 @@ export function registerAuthRoutes(app) {
       }
 
       const user = await createUser({ email, password, fullName, role });
-      const token = signJwt(user);
+
+      const accessToken = signJwt(user);
+      const refreshToken = createRefreshTokenValue();
+
+      await persistRefreshToken({
+        subjectId: user.id,
+        subjectType: "user",
+        refreshToken,
+        userAgent: req.headers["user-agent"],
+        ip: req.ip,
+      });
+
+      const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+      setRefreshCookie(res, refreshToken);
 
       return res.status(201).json({
         user: {
@@ -64,7 +88,8 @@ export function registerAuthRoutes(app) {
           fullName: user.fullName,
           role: user.role,
         },
-        token,
+        token: accessToken,
+        ...(includeRefreshInBody ? { refreshToken } : {}),
       });
     }),
   );
@@ -73,9 +98,23 @@ export function registerAuthRoutes(app) {
     "/login",
     // rateLimit({ keyPrefix: "auth:login", windowSeconds: 60, max: 10 }),
     passport.authenticate("local", { session: true }),
-    (req, res) => {
+    asyncHandler(async (req, res) => {
       const user = req.user;
-      const token = signJwt(user);
+
+      const accessToken = signJwt(user);
+      const refreshToken = createRefreshTokenValue();
+
+      await persistRefreshToken({
+        subjectId: user.id,
+        subjectType: "user",
+        refreshToken,
+        userAgent: req.headers["user-agent"],
+        ip: req.ip,
+      });
+
+      // Web/PWA uses HttpOnly cookie. Mobile can request refresh token in body.
+      const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+      setRefreshCookie(res, refreshToken);
 
       res.json({
         user: {
@@ -84,9 +123,10 @@ export function registerAuthRoutes(app) {
           fullName: user.fullName,
           role: user.role,
         },
-        token,
+        token: accessToken,
+        ...(includeRefreshInBody ? { refreshToken } : {}),
       });
-    },
+    }),
   );
 
 // Staff login (waiter / kitchen / staff-admin) using email + passcode
@@ -95,26 +135,68 @@ router.post(
   "/staff/login",
   rateLimit({ keyPrefix: "auth:staff-login", windowSeconds: 60, max: 20 }),
   asyncHandler(async (req, res) => {
-    const schema = z.object({
-      email: z.string().email(),
-      passcode: z.string().min(4).max(50),
-    });
+    // Terminal mode staff login: prefer staffId + passcode.
+    // Backwards compatible: email + passcode.
+    const schema = z
+      .object({
+        staffCode: z.string().min(2).optional(),
+        staffId: z.string().min(1).optional(), // legacy
+        email: z.string().email().optional(), // legacy
+        restaurantId: z.string().min(1).optional(),
+        passcode: z.string().min(4).max(50),
+      })
+      .refine((v) => !!(v.staffCode || v.staffId || v.email), {
+        message: "staffCode, staffId, or email is required",
+      });
 
     const parsed = schema.safeParse(req.body || {});
     if (!parsed.success) {
       return res.status(400).json({ message: "Invalid input", errors: parsed.error.errors });
     }
 
-    const { email, passcode } = parsed.data;
+    const { staffCode, staffId, email, restaurantId, passcode } = parsed.data;
 
-    const result = await pool.query(
-      `SELECT id, restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
-       FROM staff
-       WHERE lower(email) = lower($1)
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [email],
-    );
+    const result = staffCode
+      ? restaurantId
+        ? await pool.query(
+            `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
+             FROM staff
+             WHERE staff_code = $1 AND restaurant_id = $2
+             LIMIT 1`,
+            [staffCode, restaurantId],
+          )
+        : await pool.query(
+            `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
+             FROM staff
+             WHERE staff_code = $1
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [staffCode],
+          )
+      : staffId
+        ? restaurantId
+          ? await pool.query(
+              `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
+               FROM staff
+               WHERE id = $1 AND restaurant_id = $2
+               LIMIT 1`,
+              [staffId, restaurantId],
+            )
+          : await pool.query(
+              `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
+               FROM staff
+               WHERE id = $1
+               LIMIT 1`,
+              [staffId],
+            )
+        : await pool.query(
+            `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
+             FROM staff
+             WHERE lower(email) = lower($1)
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [email],
+          );
 
     const staff = result.rows[0];
     if (!staff || !staff.isActive) {
@@ -133,7 +215,7 @@ router.post(
       });
     }
 
-    const token = signJwt({
+    const accessToken = signJwt({
       id: staff.id,
       email: staff.email,
       role: staff.role,
@@ -142,15 +224,29 @@ router.post(
       staffId: staff.id,
     });
 
+    const refreshToken = createRefreshTokenValue();
+    await persistRefreshToken({
+      subjectId: staff.id,
+      subjectType: "staff",
+      refreshToken,
+      userAgent: req.headers["user-agent"],
+      ip: req.ip,
+    });
+
+    const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+    setRefreshCookie(res, refreshToken);
+
     return res.json({
       user: {
         id: staff.id,
+        staffCode: staff.staffCode || null,
         email: staff.email,
         fullName: staff.fullName,
         role: staff.role,
         restaurantId: staff.restaurantId,
       },
-      token,
+      token: accessToken,
+      ...(includeRefreshInBody ? { refreshToken } : {}),
       restaurantId: staff.restaurantId,
     });
   }),
@@ -158,7 +254,20 @@ router.post(
 
   router.post(
     "/logout",
-    asyncHandler((req, res, next) => {
+    asyncHandler(async (req, res, next) => {
+      // Revoke refresh token if present (cookie or body)
+      const cookies = parseCookies(req);
+      const rt = cookies[env.refreshTokenCookieName] || req.body?.refreshToken;
+      if (rt) {
+        try {
+          await revokeRefreshTokenValue(rt);
+        } catch {
+          // ignore
+        }
+      }
+
+      clearRefreshCookie(res);
+
       req.logout((err) => {
         if (err) return next(err);
         req.session?.destroy(() => {
@@ -170,11 +279,8 @@ router.post(
 
   router.get(
     "/me",
-    asyncHandler((req, res) => {
-      if (!req.user) {
-        return res.status(401).json({ message: "Not authenticated" });
-      }
-
+    requireAuth,
+    asyncHandler(async (req, res) => {
       const user = req.user;
       res.json({
         id: user.id,
@@ -182,6 +288,81 @@ router.post(
         fullName: user.fullName,
         role: user.role,
         restaurantId: user.restaurantId,
+        isStaff: user.isStaff || false,
+        staffId: user.staffId || null,
+      });
+    }),
+  );
+
+  // Exchange refresh token for a new access token (and rotate refresh token)
+  router.post(
+    "/refresh",
+    asyncHandler(async (req, res) => {
+      const cookies = parseCookies(req);
+      const incoming = req.body?.refreshToken || cookies[env.refreshTokenCookieName];
+      if (!incoming) {
+        return res.status(401).json({ message: "Missing refresh token" });
+      }
+
+      const existing = await findValidRefreshToken(incoming);
+      if (!existing) {
+        clearRefreshCookie(res);
+        return res.status(401).json({ message: "Invalid refresh token" });
+      }
+
+      // Load subject
+      let subject = null;
+      if (existing.subjectType === "user") {
+        subject = await findUserById(existing.subjectId);
+      } else {
+        const r = await pool.query(
+          `SELECT id, restaurant_id AS "restaurantId", full_name AS "fullName", email, role, is_active AS "isActive"
+           FROM staff
+           WHERE id = $1
+           LIMIT 1`,
+          [existing.subjectId],
+        );
+        subject = r.rows[0] || null;
+        if (subject && !subject.isActive) subject = null;
+        if (subject) {
+          subject = {
+            id: subject.id,
+            email: subject.email,
+            role: subject.role,
+            restaurantId: subject.restaurantId,
+            isStaff: true,
+            staffId: subject.id,
+            fullName: subject.fullName,
+          };
+        }
+      }
+
+      if (!subject) {
+        await revokeRefreshTokenById(existing.id);
+        clearRefreshCookie(res);
+        return res.status(401).json({ message: "Session no longer valid" });
+      }
+
+      // Rotate refresh token
+      const nextRefreshToken = createRefreshTokenValue();
+      const persisted = await persistRefreshToken({
+        subjectId: existing.subjectId,
+        subjectType: existing.subjectType,
+        refreshToken: nextRefreshToken,
+        userAgent: req.headers["user-agent"],
+        ip: req.ip,
+      });
+
+      await revokeRefreshTokenById(existing.id, { replacedByTokenId: persisted.id });
+      setRefreshCookie(res, nextRefreshToken);
+
+      const nextAccessToken = signJwt(subject);
+
+      const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+
+      return res.json({
+        token: nextAccessToken,
+        ...(includeRefreshInBody ? { refreshToken: nextRefreshToken } : {}),
       });
     }),
   );

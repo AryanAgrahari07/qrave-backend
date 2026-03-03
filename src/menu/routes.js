@@ -16,6 +16,7 @@ import {
 import { env } from "../config/env.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { z } from "zod";
 import { createPresignedUploadUrl, publicFileUrl } from "../media/s3.js";
 import { v4 as uuidv4 } from "uuid";
@@ -121,6 +122,7 @@ export function registerMenuRoutes(app) {
   router.post(
     "/:restaurantId/categories",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:categories:create", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -141,6 +143,7 @@ export function registerMenuRoutes(app) {
   router.put(
     "/:restaurantId/categories/:categoryId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:categories:update", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -162,6 +165,7 @@ export function registerMenuRoutes(app) {
   router.delete(
     "/:restaurantId/categories/:categoryId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:categories:delete", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -201,6 +205,7 @@ export function registerMenuRoutes(app) {
   router.post(
     "/:restaurantId/items",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:create", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -221,6 +226,7 @@ export function registerMenuRoutes(app) {
   router.put(
     "/:restaurantId/items/:itemId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:update", windowSeconds: 60, max: 240 }),
     asyncHandler(async (req, res) => {
@@ -242,6 +248,7 @@ export function registerMenuRoutes(app) {
   router.delete(
     "/:restaurantId/items/:itemId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:delete", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -260,6 +267,7 @@ export function registerMenuRoutes(app) {
   router.patch(
     "/:restaurantId/items/:itemId/availability",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:availability", windowSeconds: 60, max: 300 }),
     asyncHandler(async (req, res) => {
@@ -282,6 +290,7 @@ export function registerMenuRoutes(app) {
   router.post(
     "/:restaurantId/items/:itemId/image/upload-url",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:imageUploadUrl", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -312,6 +321,7 @@ export function registerMenuRoutes(app) {
   router.put(
     "/:restaurantId/items/:itemId/image",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:items:imagePersist", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {

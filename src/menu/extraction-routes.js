@@ -3,6 +3,7 @@ import { createPgPool } from "../db.js";
 import { env } from "../config/env.js";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { 
   createExtractionJob, 
@@ -45,6 +46,7 @@ const confirmItemsSchema = z.object({
 router.post(
   "/:restaurantId/menu-card/upload-url",
   requireAuth,
+    requireActiveSubscription,
   requireRole("owner", "admin"),
   rateLimit({ keyPrefix: "menu:card:uploadUrl", windowSeconds: 60, max: 20 }),
   asyncHandler(async (req, res) => {
@@ -87,6 +89,7 @@ router.post(
 router.post(
   "/:restaurantId/extract",
   requireAuth,
+    requireActiveSubscription,
   requireRole("owner", "admin"),
   rateLimit({ keyPrefix: "menu:extract", windowSeconds: 60, max: 10 }),
   asyncHandler(async (req, res) => {
@@ -118,6 +121,7 @@ router.post(
 router.get(
   "/:restaurantId/extract/:jobId",
   requireAuth,
+    requireActiveSubscription,
   requireRole("owner", "admin"),
   asyncHandler(async (req, res) => {
     const { restaurantId, jobId } = req.params;
@@ -144,6 +148,7 @@ router.get(
 router.post(
   "/:restaurantId/extract/:jobId/confirm",
   requireAuth,
+    requireActiveSubscription,
   requireRole("owner", "admin"),
   rateLimit({ keyPrefix: "menu:extract:confirm", windowSeconds: 60, max: 10 }),
   asyncHandler(async (req, res) => {
@@ -266,6 +271,7 @@ router.post(
 router.get(
   "/:restaurantId/extractions",
   requireAuth,
+    requireActiveSubscription,
   requireRole("owner", "admin"),
   asyncHandler(async (req, res) => {
     const { restaurantId } = req.params;

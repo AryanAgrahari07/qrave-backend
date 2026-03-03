@@ -3,6 +3,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { env } from "../config/env.js";
 import { createStaff, listStaff, updateStaff, deactivateStaff } from "./service.js";
 
@@ -61,6 +62,7 @@ export function registerStaffRoutes(app) {
   app.use(
     "/api/restaurants/:restaurantId/staff",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     router,
   );

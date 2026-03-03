@@ -14,6 +14,8 @@ import {
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+export const subjectTypeEnum = pgEnum("subject_type", ["user", "staff"]);
+
 //
 // Enums
 //
@@ -57,6 +59,13 @@ export const guestQueueStatusEnum = pgEnum("guest_queue_status", [
 ]);
 
 export const selectionTypeEnum = pgEnum("selection_type", ["SINGLE", "MULTIPLE"]);
+
+export const subscriptionStatusEnum = pgEnum("subscription_status", [
+  "ACTIVE",
+  "EXPIRED",
+  "GRACE_PERIOD",
+  "PENDING",
+]);
 
 //
 // Platform users (SaaS owners / platform admins)
@@ -111,7 +120,33 @@ export const restaurants = pgTable("restaurants", {
   settings: jsonb("settings"),
 
   plan: varchar("plan", { length: 50 }).default("STARTER"),
+  subscriptionValidUntil: timestamp("subscription_valid_until", { withTimezone: true }),
+  subscriptionStatus: subscriptionStatusEnum("subscription_status").notNull().default("ACTIVE"),
   isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
+// Subscriptions (for SaaS platform)
+//
+export const subscriptions = pgTable("subscriptions", {
+  id: varchar("id")
+    .primaryKey()
+    .default(sql`gen_random_uuid()`),
+  restaurantId: varchar("restaurant_id")
+    .notNull()
+    .references(() => restaurants.id, { onDelete: "cascade" }),
+  plan: varchar("plan", { length: 50 }).notNull(),
+  amount: numeric("amount", { precision: 10, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 10 }).notNull().default("INR"),
+  startDate: timestamp("start_date", { withTimezone: true }).notNull().defaultNow(),
+  endDate: timestamp("end_date", { withTimezone: true }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("PENDING"), // PENDING, ACTIVE, FAILED, CANCELLED
+  razorpayOrderId: varchar("razorpay_order_id", { length: 100 }),
+  razorpayPaymentId: varchar("razorpay_payment_id", { length: 100 }),
+  razorpaySignature: text("razorpay_signature"),
+  failureReason: text("failure_reason"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
@@ -209,6 +244,10 @@ export const staff = pgTable("staff", {
   restaurantId: varchar("restaurant_id")
     .notNull()
     .references(() => restaurants.id, { onDelete: "cascade" }),
+
+  // Human-friendly login code like W-1001 / K-1001
+  staffCode: varchar("staff_code", { length: 20 }),
+
   fullName: varchar("full_name", { length: 150 }).notNull(),
   phoneNumber: varchar("phone_number", { length: 20 }),
   email: varchar("email", { length: 255 }),
@@ -218,6 +257,22 @@ export const staff = pgTable("staff", {
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+//
+// Refresh Tokens
+//
+export const authRefreshTokens = pgTable("auth_refresh_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  subjectId: varchar("subject_id").notNull(),
+  subjectType: subjectTypeEnum("subject_type").notNull(), // 'user' | 'staff'
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  replacedByTokenId: varchar("replaced_by_token_id"),
+  userAgent: text("user_agent"),
+  ip: text("ip"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 //
@@ -582,6 +637,8 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
 export type Restaurant = typeof restaurants.$inferSelect;
+export type AuthRefreshToken = typeof authRefreshTokens.$inferSelect;
+export type Subscription = typeof subscriptions.$inferSelect;
 export type MenuCategory = typeof menuCategories.$inferSelect;
 export type MenuExtractionJob = typeof menuExtractionJobs.$inferSelect;
 export type MenuItem = typeof menuItems.$inferSelect;

@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import {
   generateRestaurantQR,
@@ -30,6 +31,7 @@ export function registerQRRoutes(app) {
   router.post(
     "/:restaurantId/generate",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     rateLimit({ keyPrefix: "qr:generate", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -64,6 +66,7 @@ export function registerQRRoutes(app) {
   router.post(
     "/:restaurantId/generate-all",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     rateLimit({ keyPrefix: "qr:generate-all", windowSeconds: 60, max: 10 }),
     asyncHandler(async (req, res) => {
@@ -81,6 +84,7 @@ export function registerQRRoutes(app) {
   router.get(
     "/:restaurantId/tables/:tableId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     rateLimit({ keyPrefix: "qr:get-table", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -94,6 +98,7 @@ export function registerQRRoutes(app) {
   router.get(
     "/:restaurantId/stats",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     rateLimit({ keyPrefix: "qr:stats", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -107,6 +112,7 @@ export function registerQRRoutes(app) {
   router.put(
     "/:restaurantId/update-payload",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     rateLimit({ keyPrefix: "qr:update-payload", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {

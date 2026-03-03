@@ -5,6 +5,8 @@ CREATE TYPE "public"."payment_method" AS ENUM('CASH', 'UPI', 'CARD', 'WALLET', '
 CREATE TYPE "public"."payment_status_enum" AS ENUM('DUE', 'PAID', 'PARTIALLY_PAID');--> statement-breakpoint
 CREATE TYPE "public"."selection_type" AS ENUM('SINGLE', 'MULTIPLE');--> statement-breakpoint
 CREATE TYPE "public"."staff_role" AS ENUM('ADMIN', 'WAITER', 'KITCHEN');--> statement-breakpoint
+CREATE TYPE "public"."subject_type" AS ENUM('user', 'staff');--> statement-breakpoint
+CREATE TYPE "public"."subscription_status" AS ENUM('ACTIVE', 'EXPIRED', 'GRACE_PERIOD', 'PENDING');--> statement-breakpoint
 CREATE TYPE "public"."table_status" AS ENUM('AVAILABLE', 'OCCUPIED', 'RESERVED', 'BLOCKED');--> statement-breakpoint
 CREATE TABLE "analytics_events" (
 	"id" integer PRIMARY KEY GENERATED ALWAYS AS IDENTITY (sequence name "analytics_events_id_seq" INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START WITH 1 CACHE 1),
@@ -15,6 +17,20 @@ CREATE TABLE "analytics_events" (
 	"menu_item_id" varchar,
 	"metadata" jsonb,
 	"occurred_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "auth_refresh_tokens" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"subject_id" varchar NOT NULL,
+	"subject_type" "subject_type" NOT NULL,
+	"token_hash" text NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"revoked_at" timestamp with time zone,
+	"replaced_by_token_id" varchar,
+	"user_agent" text,
+	"ip" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "auth_refresh_tokens_token_hash_unique" UNIQUE("token_hash")
 );
 --> statement-breakpoint
 CREATE TABLE "cities" (
@@ -244,6 +260,8 @@ CREATE TABLE "restaurants" (
 	"qr_design" jsonb,
 	"settings" jsonb,
 	"plan" varchar(50) DEFAULT 'STARTER',
+	"subscription_valid_until" timestamp with time zone,
+	"subscription_status" "subscription_status" DEFAULT 'ACTIVE' NOT NULL,
 	"is_active" boolean DEFAULT true NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now(),
 	"updated_at" timestamp with time zone DEFAULT now(),
@@ -253,6 +271,7 @@ CREATE TABLE "restaurants" (
 CREATE TABLE "staff" (
 	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"restaurant_id" varchar NOT NULL,
+	"staff_code" varchar(20),
 	"full_name" varchar(150) NOT NULL,
 	"phone_number" varchar(20),
 	"email" varchar(255),
@@ -269,6 +288,23 @@ CREATE TABLE "states" (
 	"name" varchar(100) NOT NULL,
 	"country_code" varchar(3) NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now()
+);
+--> statement-breakpoint
+CREATE TABLE "subscriptions" (
+	"id" varchar PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"restaurant_id" varchar NOT NULL,
+	"plan" varchar(50) NOT NULL,
+	"amount" numeric(10, 2) NOT NULL,
+	"currency" varchar(10) DEFAULT 'INR' NOT NULL,
+	"start_date" timestamp with time zone DEFAULT now() NOT NULL,
+	"end_date" timestamp with time zone NOT NULL,
+	"status" varchar(20) DEFAULT 'PENDING' NOT NULL,
+	"razorpay_order_id" varchar(100),
+	"razorpay_payment_id" varchar(100),
+	"razorpay_signature" text,
+	"failure_reason" text,
+	"created_at" timestamp with time zone DEFAULT now(),
+	"updated_at" timestamp with time zone DEFAULT now()
 );
 --> statement-breakpoint
 CREATE TABLE "tables" (
@@ -347,6 +383,7 @@ ALTER TABLE "orders" ADD CONSTRAINT "orders_placed_by_staff_id_staff_id_fk" FORE
 ALTER TABLE "restaurants" ADD CONSTRAINT "restaurants_owner_id_users_id_fk" FOREIGN KEY ("owner_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "staff" ADD CONSTRAINT "staff_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "states" ADD CONSTRAINT "states_country_code_countries_code_fk" FOREIGN KEY ("country_code") REFERENCES "public"."countries"("code") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "subscriptions" ADD CONSTRAINT "subscriptions_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "tables" ADD CONSTRAINT "tables_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "tables" ADD CONSTRAINT "tables_assigned_waiter_id_staff_id_fk" FOREIGN KEY ("assigned_waiter_id") REFERENCES "public"."staff"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "transactions" ADD CONSTRAINT "transactions_restaurant_id_restaurants_id_fk" FOREIGN KEY ("restaurant_id") REFERENCES "public"."restaurants"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

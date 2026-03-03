@@ -6,6 +6,11 @@ import { findUserByEmail } from "../auth/service.js";
 import { getRestaurantBySlug } from "../restaurant/service.js";
 import { signJwt } from "../auth/passport.js";
 import {
+  createRefreshTokenValue,
+  persistRefreshToken,
+  setRefreshCookie,
+} from "../auth/refreshTokens.js";
+import {
   completeOnboarding,
   validateOnboardingData,
   generateDefaultTables,
@@ -62,6 +67,7 @@ const onboardingSchema = z.object({
     createAdminStaff: z.boolean().optional(),
     adminPasscode: z.string().optional(),
   }).optional().default({}),
+  language: z.enum(["en", "es", "hi"]).optional().default("en"),
 });
 
 const onboardingQuickStartSchema = z.object({
@@ -77,6 +83,7 @@ const onboardingQuickStartSchema = z.object({
   }),
   tableCount: z.number().int().min(1).max(100).optional().default(10),
   useDefaultCategories: z.boolean().optional().default(true),
+  language: z.enum(["en", "es", "hi"]).optional().default("en"),
 });
 
 export function registerOnboardingRoutes(app) {
@@ -125,16 +132,29 @@ export function registerOnboardingRoutes(app) {
       // Process onboarding
       const result = await completeOnboarding(data);
 
-      // Generate JWT token for immediate login
+      // Generate access + refresh tokens for immediate login
       const token = signJwt({
         id: result.user.id,
         email: result.user.email,
         role: result.user.role,
       });
 
+      const refreshToken = createRefreshTokenValue();
+      await persistRefreshToken({
+        subjectId: result.user.id,
+        subjectType: "user",
+        refreshToken,
+        userAgent: req.headers["user-agent"],
+        ip: req.ip,
+      });
+
+      const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+      setRefreshCookie(res, refreshToken);
+
       res.status(201).json({
         ...result,
         token,
+        ...(includeRefreshInBody ? { refreshToken } : {}),
         message: "Onboarding completed successfully!",
       });
     })
@@ -175,7 +195,7 @@ export function registerOnboardingRoutes(app) {
       // Generate default configuration
       const tables = generateDefaultTables(tableCount);
       const categories = useDefaultCategories
-        ? generateDefaultCategories(restaurant.type)
+        ? generateDefaultCategories(restaurant.type, parsed.data.language)
         : [];
 
       // Complete onboarding with defaults
@@ -190,16 +210,29 @@ export function registerOnboardingRoutes(app) {
         },
       });
 
-      // Generate JWT token for immediate login
+      // Generate access + refresh tokens for immediate login
       const token = signJwt({
         id: result.user.id,
         email: result.user.email,
         role: result.user.role,
       });
 
+      const refreshToken = createRefreshTokenValue();
+      await persistRefreshToken({
+        subjectId: result.user.id,
+        subjectType: "user",
+        refreshToken,
+        userAgent: req.headers["user-agent"],
+        ip: req.ip,
+      });
+
+      const includeRefreshInBody = String(req.query?.includeRefresh || "").toLowerCase() === "true";
+      setRefreshCookie(res, refreshToken);
+
       res.status(201).json({
         ...result,
         token,
+        ...(includeRefreshInBody ? { refreshToken } : {}),
         message: "Quick start onboarding completed successfully!",
       });
     })
@@ -259,10 +292,10 @@ export function registerOnboardingRoutes(app) {
     rateLimit({ keyPrefix: "onboarding:defaults", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
       const { restaurantType } = req.params;
-      const { tableCount = 10 } = req.query;
+      const { tableCount = 10, language = "en" } = req.query;
 
       const tables = generateDefaultTables(parseInt(tableCount));
-      const categories = generateDefaultCategories(restaurantType);
+      const categories = generateDefaultCategories(restaurantType, language);
 
       res.json({
         restaurantType,

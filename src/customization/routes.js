@@ -1,6 +1,7 @@
 import express from "express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import { z } from "zod";
 import {
@@ -79,6 +80,7 @@ export function registerCustomizationRoutes(app) {
   router.get(
     "/:restaurantId/items/:itemId/variants",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { itemId } = req.params;
@@ -91,6 +93,7 @@ export function registerCustomizationRoutes(app) {
   router.post(
     "/:restaurantId/items/:itemId/variants",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:variants:create", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -110,6 +113,7 @@ export function registerCustomizationRoutes(app) {
   router.put(
     "/:restaurantId/variants/:variantId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:variants:update", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -131,6 +135,7 @@ export function registerCustomizationRoutes(app) {
   router.delete(
     "/:restaurantId/variants/:variantId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:variants:delete", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -151,6 +156,7 @@ export function registerCustomizationRoutes(app) {
   router.get(
     "/:restaurantId/modifier-groups",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
@@ -163,6 +169,7 @@ export function registerCustomizationRoutes(app) {
   router.post(
     "/:restaurantId/modifier-groups",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifierGroups:create", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -182,6 +189,7 @@ export function registerCustomizationRoutes(app) {
   router.put(
     "/:restaurantId/modifier-groups/:groupId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifierGroups:update", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -203,6 +211,7 @@ export function registerCustomizationRoutes(app) {
   router.delete(
     "/:restaurantId/modifier-groups/:groupId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifierGroups:delete", windowSeconds: 60, max: 60 }),
     asyncHandler(async (req, res) => {
@@ -219,6 +228,7 @@ export function registerCustomizationRoutes(app) {
   router.get(
     "/:restaurantId/modifier-groups/:groupId/modifiers",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { groupId } = req.params;
@@ -231,6 +241,7 @@ export function registerCustomizationRoutes(app) {
   router.post(
     "/:restaurantId/modifier-groups/:groupId/modifiers",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifiers:create", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -250,6 +261,7 @@ export function registerCustomizationRoutes(app) {
   router.put(
     "/:restaurantId/modifiers/:modifierId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifiers:update", windowSeconds: 60, max: 240 }),
     asyncHandler(async (req, res) => {
@@ -271,6 +283,7 @@ export function registerCustomizationRoutes(app) {
   router.delete(
     "/:restaurantId/modifiers/:modifierId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:modifiers:delete", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -291,6 +304,7 @@ export function registerCustomizationRoutes(app) {
   router.get(
     "/:restaurantId/items/:itemId/modifier-groups",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { itemId } = req.params;
@@ -303,6 +317,7 @@ export function registerCustomizationRoutes(app) {
   router.post(
     "/:restaurantId/items/:itemId/modifier-groups/:groupId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:itemModifierGroups:link", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {
@@ -318,6 +333,7 @@ export function registerCustomizationRoutes(app) {
   router.delete(
     "/:restaurantId/items/:itemId/modifier-groups/:groupId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     rateLimit({ keyPrefix: "menu:itemModifierGroups:unlink", windowSeconds: 60, max: 120 }),
     asyncHandler(async (req, res) => {

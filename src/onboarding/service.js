@@ -274,34 +274,77 @@ export function generateDefaultTables(count = 10, options = {}) {
  * @param {string} restaurantType - Type of restaurant
  * @returns {Array} Array of category configurations
  */
-export function generateDefaultCategories(restaurantType = "Restaurant") {
+export function generateDefaultCategories(restaurantType = "Restaurant", language = "en") {
+  const translations = {
+    hi: {
+      "Appetizers": "स्टार्टर्स",
+      "Main Course": "मेन कोर्स",
+      "Desserts": "मिठाई",
+      "Beverages": "पेय पदार्थ",
+      "Coffee": "कॉफी",
+      "Snacks": "स्नैक्स",
+      "Sandwiches": "सैंडविच",
+      "Pastries": "पेस्ट्री",
+      "Cocktails": "कॉकटेल",
+      "Beer": "बियर",
+      "Wine": "शराब",
+      "Spirits": "स्पिरिट्स",
+      "Bar Snacks": "बार स्नैक्स",
+      "Amuse-Bouche": "अम्यूज़-बूश",
+      "Soups & Salads": "सूप और सलाद"
+    },
+    es: {
+      "Appetizers": "Aperitivos",
+      "Main Course": "Plato Principal",
+      "Desserts": "Postres",
+      "Beverages": "Bebidas",
+      "Coffee": "Café",
+      "Snacks": "Aperitivos",
+      "Sandwiches": "Sándwiches",
+      "Pastries": "Pasteles",
+      "Cocktails": "Cócteles",
+      "Beer": "Cerveza",
+      "Wine": "Vino",
+      "Spirits": "Licores",
+      "Bar Snacks": "Aperitivos de Bar",
+      "Amuse-Bouche": "Amuse-Bouche",
+      "Soups & Salads": "Sopas y Ensaladas"
+    }
+  };
+
+  const getTranslatedName = (name) => {
+    if (language === "hi") return translations.hi[name] || name;
+    if (language === "es") return translations.es[name] || name;
+    return name;
+  };
+
   const categoryMap = {
     "Restaurant": [
-      { name: "Appetizers" },
-      { name: "Main Course" },
-      { name: "Desserts" },
-      { name: "Beverages" },
+      { name: getTranslatedName("Appetizers") },
+      { name: getTranslatedName("Main Course") },
+      { name: getTranslatedName("Desserts") },
+      { name: getTranslatedName("Beverages") },
     ],
     "Cafe": [
-      { name: "Coffee" },
-      { name: "Snacks" },
-      { name: "Sandwiches" },
-      { name: "Pastries" },
+      { name: getTranslatedName("Coffee") },
+      { name: getTranslatedName("Snacks") },
+      { name: getTranslatedName("Sandwiches") },
+      { name: getTranslatedName("Pastries") },
     ],
     "Bar": [
-      { name: "Cocktails" },
-      { name: "Beer" },
-      { name: "Wine" },
-      { name: "Spirits" },
-      { name: "Bar Snacks" },
+      { name: getTranslatedName("Cocktails") },
+      { name: getTranslatedName("Beer") },
+      { name: getTranslatedName("Wine") },
+      { name: getTranslatedName("Spirits") },
+      { name: getTranslatedName("Bar Snacks") },
     ],
     "Fine Dining": [
-      { name: "Amuse-Bouche" },
-      { name: "Appetizers" },
-      { name: "Soups & Salads" },
-      { name: "Main Course" },
-      { name: "Desserts" },
-      { name: "Beverages" },
+      { name: getTranslatedName("Amuse-Bouche") },
+      { name: getTranslatedName("Appetizers") },
+      { name: getTranslatedName("Soups & Salads") },
+      { name: getTranslatedName("Main Course") },
+      { name: getTranslatedName("Desserts") },
+      { name: getTranslatedName("Beverages") },
     ],
   };
 

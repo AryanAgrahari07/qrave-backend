@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { rateLimit } from "../middleware/rateLimit.js";
 import {
   registerInQueue,
@@ -106,6 +107,7 @@ export function registerQueueRoutes(app) {
   app.use(
     "/api/restaurants/:restaurantId/queue",
     requireAuth,
+    requireActiveSubscription,
     router
   );
 

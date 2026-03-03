@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import {
   listRestaurants,
   listRestaurantsByOwner, // Add this new service function
@@ -118,6 +119,7 @@ export function registerRestaurantRoutes(app) {
   router.post(
     "/",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin"),
     asyncHandler(async (req, res) => {
       const parsed = restaurantCreateSchema.safeParse(req.body);
@@ -140,6 +142,7 @@ export function registerRestaurantRoutes(app) {
   router.put(
     "/:id",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
       const parsed = restaurantUpdateSchema.safeParse(req.body);
@@ -164,6 +167,7 @@ export function registerRestaurantRoutes(app) {
   router.delete(
     "/:id",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin"),
     asyncHandler(async (req, res) => {
       // Check ownership before allowing delete

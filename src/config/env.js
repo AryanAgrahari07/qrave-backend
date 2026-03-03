@@ -19,7 +19,29 @@ export const env = {
   sessionCookieName: process.env.SESSION_COOKIE_NAME || "qrave.sid",
   sessionTtlMs: Number(process.env.SESSION_TTL_MS || String(1000 * 60 * 60 * 24)),
   jwtSecret: requireEnv("JWT_SECRET", "dev-jwt-secret-change-me", true),
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || "1h",
+
+  razorpayKeyId: process.env.RAZORPAY_KEY_ID || "test_key",
+  razorpayKeySecret: process.env.RAZORPAY_KEY_SECRET || "test_secret", 
+  // Subscription Pricing Parameters
+  planStarterPrice: Number(process.env.PLAN_STARTER_PRICE || "1499"),
+  planProPrice: Number(process.env.PLAN_PRO_PRICE || "3999"),
+  planEnterprisePrice: Number(process.env.PLAN_ENTERPRISE_PRICE || "7999"),
+
+  // Access token (JWT): short-lived, sent in Authorization header
+  accessTokenExpiresIn: process.env.ACCESS_TOKEN_EXPIRES_IN || process.env.JWT_EXPIRES_IN || "15m",
+
+  // Refresh token: long-lived, stored server-side as a hash, and sent via HttpOnly cookie (web) or native secure storage (mobile)
+  refreshTokenTtlDays: Number(process.env.REFRESH_TOKEN_TTL_DAYS || "60"),
+  refreshTokenCookieName: process.env.REFRESH_TOKEN_COOKIE_NAME || "qrave.refresh",
+
+  // Cookie settings for web/PWA refresh token.
+  // - SameSite=Strict is most secure but can break cross-site deployments.
+  // - Recommended: Lax for same-site; None + Secure for cross-site.
+  refreshCookieSameSite: (process.env.REFRESH_COOKIE_SAMESITE || "lax").toLowerCase(),
+  refreshCookieSecure: String(process.env.REFRESH_COOKIE_SECURE || "").length
+    ? String(process.env.REFRESH_COOKIE_SECURE).toLowerCase() === "true"
+    : isProd,
+
   databaseUrl: requireEnv("DATABASE_URL", undefined, true),
   bcryptRounds: Number(process.env.BCRYPT_ROUNDS || "10"),
   menuCacheTtlSec: Number(process.env.MENU_CACHE_TTL_SEC || "300"),

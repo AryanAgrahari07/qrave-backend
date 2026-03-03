@@ -15,6 +15,7 @@ import {
 //
 // ENUMS
 //
+export const subjectTypeEnum = pgEnum("subject_type", ["user", "staff"]);
 
 export const tableStatusEnum = pgEnum("table_status", [
   "AVAILABLE",
@@ -335,6 +336,9 @@ export const staff = pgTable("staff", {
     .notNull()
     .references(() => restaurants.id, { onDelete: "cascade" }),
 
+  // Human-friendly login code like W-1001 / K-1001
+  staffCode: varchar("staff_code", { length: 20 }),
+
   fullName: varchar("full_name", { length: 150 }).notNull(),
   phoneNumber: varchar("phone_number", { length: 20 }),
   email: varchar("email", { length: 255 }),
@@ -348,6 +352,22 @@ export const staff = pgTable("staff", {
 
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+
+// Refresh Tokens
+//
+export const authRefreshTokens = pgTable("auth_refresh_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  subjectId: varchar("subject_id").notNull(),
+  subjectType: subjectTypeEnum("subject_type").notNull(), // 'user' | 'staff'
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  replacedByTokenId: varchar("replaced_by_token_id"),
+  userAgent: text("user_agent"),
+  ip: text("ip"),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
 

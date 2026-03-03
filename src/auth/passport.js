@@ -52,7 +52,7 @@ export function signJwt(user) {
     staffId: user.staffId || null,
   };
 
-  const expiresIn = env.jwtExpiresIn;
+  const expiresIn = env.accessTokenExpiresIn;
 
   return jwt.sign(payload, env.jwtSecret, { expiresIn });
 }

@@ -1,6 +1,7 @@
 import express from "express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { 
   getDashboardSummary,
   getTableStats,
@@ -17,6 +18,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/summary",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;
@@ -36,6 +38,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/tables",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;
@@ -55,6 +58,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/orders",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;
@@ -74,6 +78,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/queue",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;
@@ -93,6 +98,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/scan-activity",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;
@@ -112,6 +118,7 @@ export function registerDashboardRoutes(app) {
   router.get(
     "/:restaurantId/recent-orders",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
     //   const restaurantId = req.user.restaurantId;

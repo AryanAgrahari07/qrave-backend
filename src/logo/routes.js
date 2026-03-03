@@ -2,6 +2,7 @@ import express from "express";
 import { z } from "zod";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import {
   getPredefinedLogos,
   generateLogoUploadUrl,
@@ -37,6 +38,7 @@ export function registerLogoRoutes(app) {
   router.post(
     "/:restaurantId/upload-url",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
@@ -62,6 +64,7 @@ export function registerLogoRoutes(app) {
   router.put(
     "/:restaurantId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
@@ -87,6 +90,7 @@ export function registerLogoRoutes(app) {
   router.get(
     "/:restaurantId",
     requireAuth,
+    requireActiveSubscription,
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
       const logo = await getRestaurantLogo(restaurantId);
@@ -98,6 +102,7 @@ export function registerLogoRoutes(app) {
   router.delete(
     "/:restaurantId",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "admin", "platform_admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;

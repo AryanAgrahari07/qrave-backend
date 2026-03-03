@@ -1,6 +1,7 @@
 import express from "express";
 import { asyncHandler } from "../middleware/asyncHandler.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireActiveSubscription } from "../middleware/subscriptionBlocked.js";
 import { getAnalyticsOverview, getAnalyticsSummary } from "./service.js";
 
 const router = express.Router();
@@ -12,6 +13,7 @@ export function registerAnalyticsRoutes(app) {
   router.get(
     "/:restaurantId/overview",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
@@ -32,6 +34,7 @@ export function registerAnalyticsRoutes(app) {
   router.get(
     "/:restaurantId/summary",
     requireAuth,
+    requireActiveSubscription,
     requireRole("owner", "platform_admin", "admin"),
     asyncHandler(async (req, res) => {
       const { restaurantId } = req.params;
