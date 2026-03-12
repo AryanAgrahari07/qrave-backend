@@ -27,6 +27,8 @@ console.info = (...args) => { if(args.length) logger.info(args.length === 1 ? ar
 console.debug = (...args) => { if(args.length) logger.debug(args.length === 1 ? args[0] : args); };
 
 const app = express();
+app.set('trust proxy', true);
+
 const httpServer = createServer(app);
 
 // SEC-1: Trust first proxy (AWS ALB / CloudFlare) so req.ip uses X-Forwarded-For

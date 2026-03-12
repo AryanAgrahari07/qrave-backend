@@ -94,7 +94,11 @@ export function setRefreshCookie(res, refreshToken) {
   const isProd = env.isProd;
   const maxAgeMs = env.refreshTokenTtlDays * 24 * 60 * 60 * 1000;
 
-  // NOTE: We set the cookie manually to avoid adding a dependency.
+  // ALB Fix: Check both direct HTTPS and X-Forwarded-Proto header
+  const isSecure = env.refreshCookieSecure || 
+                   (isProd && (res.req?.protocol === 'https' || 
+                               res.req?.get('x-forwarded-proto') === 'https'));
+
   const sameSite = (() => {
     const v = env.refreshCookieSameSite;
     if (v === "strict") return "Strict";
@@ -107,7 +111,7 @@ export function setRefreshCookie(res, refreshToken) {
     `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
     "Path=/",
     "HttpOnly",
-    env.refreshCookieSecure ? "Secure" : "",
+    isSecure ? "Secure" : "",
     `SameSite=${sameSite}`,
   ].filter(Boolean);
 
