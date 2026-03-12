@@ -123,6 +123,7 @@ export async function completeOnboarding(data) {
         const categoriesWithRestaurant = categoriesData.map((cat, index) => ({
           restaurantId: restaurant.id,
           name: cat.name,
+          nameTranslations: cat.nameTranslations || {},
           sortOrder: cat.sortOrder !== undefined ? cat.sortOrder : index,
         }));
 
@@ -335,39 +336,47 @@ export function generateDefaultCategories(restaurantType = "Restaurant", languag
     }
   };
 
-  const getTranslatedName = (name) => {
-    if (language === "hi") return translations.hi[name] || name;
-    if (language === "es") return translations.es[name] || name;
-    return name;
+  const getCategoryObject = (baseName) => {
+    const translatedName = (language === "hi") ? (translations.hi[baseName] || baseName) :
+                           (language === "es") ? (translations.es[baseName] || baseName) :
+                           baseName;
+    return {
+      name: translatedName,
+      nameTranslations: {
+        en: baseName,
+        hi: translations.hi[baseName] || baseName,
+        es: translations.es[baseName] || baseName,
+      }
+    };
   };
 
   const categoryMap = {
     "Restaurant": [
-      { name: getTranslatedName("Appetizers") },
-      { name: getTranslatedName("Main Course") },
-      { name: getTranslatedName("Desserts") },
-      { name: getTranslatedName("Beverages") },
+      getCategoryObject("Appetizers"),
+      getCategoryObject("Main Course"),
+      getCategoryObject("Desserts"),
+      getCategoryObject("Beverages"),
     ],
     "Cafe": [
-      { name: getTranslatedName("Coffee") },
-      { name: getTranslatedName("Snacks") },
-      { name: getTranslatedName("Sandwiches") },
-      { name: getTranslatedName("Pastries") },
+      getCategoryObject("Coffee"),
+      getCategoryObject("Snacks"),
+      getCategoryObject("Sandwiches"),
+      getCategoryObject("Pastries"),
     ],
     "Bar": [
-      { name: getTranslatedName("Cocktails") },
-      { name: getTranslatedName("Beer") },
-      { name: getTranslatedName("Wine") },
-      { name: getTranslatedName("Spirits") },
-      { name: getTranslatedName("Bar Snacks") },
+      getCategoryObject("Cocktails"),
+      getCategoryObject("Beer"),
+      getCategoryObject("Wine"),
+      getCategoryObject("Spirits"),
+      getCategoryObject("Bar Snacks"),
     ],
     "Fine Dining": [
-      { name: getTranslatedName("Amuse-Bouche") },
-      { name: getTranslatedName("Appetizers") },
-      { name: getTranslatedName("Soups & Salads") },
-      { name: getTranslatedName("Main Course") },
-      { name: getTranslatedName("Desserts") },
-      { name: getTranslatedName("Beverages") },
+      getCategoryObject("Amuse-Bouche"),
+      getCategoryObject("Appetizers"),
+      getCategoryObject("Soups & Salads"),
+      getCategoryObject("Main Course"),
+      getCategoryObject("Desserts"),
+      getCategoryObject("Beverages"),
     ],
   };
 

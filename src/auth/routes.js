@@ -168,10 +168,10 @@ router.post(
       ? await pool.query(
           `SELECT id, staff_code AS "staffCode", restaurant_id AS "restaurantId", full_name AS "fullName", email, role, passcode_hash AS "passcodeHash", is_active AS "isActive"
            FROM staff
-           WHERE staff_code = $1
+           WHERE UPPER(REPLACE(staff_code, '-', '')) = $1
            ORDER BY created_at DESC
            LIMIT 1`,
-          [staffCode],
+          [staffCode.toUpperCase().replace(/-/g, "")],
         )
       : staffId
         ? await pool.query(

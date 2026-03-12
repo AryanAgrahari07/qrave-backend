@@ -55,6 +55,7 @@ const onboardingSchema = z.object({
   categories: z.array(
     z.object({
       name: z.string().min(1).max(150),
+      nameTranslations: z.record(z.string()).optional(),
       sortOrder: z.number().int().optional(),
     })
   ).optional().default([]),
