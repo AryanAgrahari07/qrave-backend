@@ -74,7 +74,7 @@ export async function enqueueJob(data) {
     const client = await getRedisClient();
     
     const job = {
-      id: crypto.randomUUID(),
+      id:  data.jobId,
       type: 'menu-extraction',
       data,
       attempts: 0,

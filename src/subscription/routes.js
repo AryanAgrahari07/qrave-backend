@@ -7,7 +7,8 @@ import {
   createSubscriptionOrder, 
   verifyPaymentAndActivate, 
   getSubscriptionHistory,
-  getAvailablePlans
+  getAvailablePlans,
+  handleRazorpayWebhook
 } from "./service.js";
 import { env } from "../config/env.js";
 
@@ -79,6 +80,40 @@ export function registerSubscriptionRoutes(app) {
     asyncHandler(async (req, res) => {
       const history = await getSubscriptionHistory(req.params.restaurantId);
       res.json(history);
+    })
+  );
+
+  // Webhook for Razorpay (No auth required, relies on signature)
+  router.post(
+    "/webhook",
+    rateLimit({ keyPrefix: "sub:webhook", windowSeconds: 60, max: 100 }),
+    asyncHandler(async (req, res) => {
+      const signature = req.headers["x-razorpay-signature"];
+      if (!signature) {
+        return res.status(400).send("No signature found");
+      }
+
+      // We MUST use req.rawBody to verify the signature, because Razorpay
+      // hashes the exact string payload they sent us.
+      if (!req.rawBody) {
+        return res.status(400).send("Raw body not found. Express JSON middleware must expose req.rawBody.");
+      }
+
+      try {
+        const result = await handleRazorpayWebhook(req.rawBody, signature, req.body);
+        
+        if (result.success) {
+          // Send 200 OK back to Razorpay so it knows the webhook was received
+          res.status(200).json({ status: "ok" });
+        } else {
+          // Still return 200 to prevent Razorpay from retrying ignored events
+          res.status(200).json({ status: "ignored", reason: result.reason });
+        }
+      } catch (err) {
+        console.error("Webhook processing error:", err);
+        // Return 400 for bad signatures so they can be logged
+        res.status(400).send(`Webhook Error: ${err.message}`);
+      }
     })
   );
 

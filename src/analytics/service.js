@@ -30,30 +30,32 @@ export async function getRevenueSeries(restaurantId, timeframe, opts) {
   const ranges = getTimeRanges(timeframe, new Date(), opts);
 
   // Bucket by hour/day/week/month based on timeframe.
-  let bucketExpr = "DATE_TRUNC('day', paid_at)";
-  let labelExpr = "TO_CHAR(DATE_TRUNC('day', paid_at), 'Mon DD')";
+  let bucketExpr = "DATE_TRUNC('day', t.paid_at)";
+  let labelExpr = "TO_CHAR(DATE_TRUNC('day', t.paid_at), 'Mon DD')";
 
   if (ranges.bucket === "hour") {
-    bucketExpr = "DATE_TRUNC('hour', paid_at)";
-    labelExpr = "TO_CHAR(DATE_TRUNC('hour', paid_at), 'FMHH12AM')";
+    bucketExpr = "DATE_TRUNC('hour', t.paid_at)";
+    labelExpr = "TO_CHAR(DATE_TRUNC('hour', t.paid_at), 'FMHH12AM')";
   }
   if (ranges.bucket === "week") {
-    bucketExpr = "DATE_TRUNC('week', paid_at)";
-    labelExpr = "'Week of ' || TO_CHAR(DATE_TRUNC('week', paid_at), 'Mon DD')";
+    bucketExpr = "DATE_TRUNC('week', t.paid_at)";
+    labelExpr = "'Week of ' || TO_CHAR(DATE_TRUNC('week', t.paid_at), 'Mon DD')";
   }
   if (ranges.bucket === "month") {
-    bucketExpr = "DATE_TRUNC('month', paid_at)";
-    labelExpr = "TO_CHAR(DATE_TRUNC('month', paid_at), 'Mon YYYY')";
+    bucketExpr = "DATE_TRUNC('month', t.paid_at)";
+    labelExpr = "TO_CHAR(DATE_TRUNC('month', t.paid_at), 'Mon YYYY')";
   }
 
   const query = `
     SELECT
       ${labelExpr} as name,
-      COALESCE(SUM(grand_total), 0) as total
-    FROM transactions
-    WHERE restaurant_id = $1
-      AND paid_at >= $2
-      AND paid_at < $3
+      COALESCE(SUM(t.grand_total), 0) as total
+    FROM transactions t
+    JOIN orders o ON o.id = t.order_id
+    WHERE t.restaurant_id = $1
+      AND o.status != 'CANCELLED'
+      AND t.paid_at >= $2
+      AND t.paid_at < $3
     GROUP BY ${bucketExpr}
     ORDER BY ${bucketExpr}
   `;
@@ -81,11 +83,13 @@ export async function getRevenueKpis(restaurantId, timeframe, opts) {
 
   const query = `
     SELECT
-      COALESCE(SUM(grand_total), 0) as revenue,
+      COALESCE(SUM(t.grand_total), 0) as revenue,
       COUNT(*)::int as bills
-    FROM transactions
-    WHERE restaurant_id = $1
-      AND paid_at >= $2 AND paid_at < $3
+    FROM transactions t
+    JOIN orders o ON o.id = t.order_id
+    WHERE t.restaurant_id = $1
+      AND o.status != 'CANCELLED'
+      AND t.paid_at >= $2 AND t.paid_at < $3
   `;
 
   const [cur, prev] = await Promise.all([

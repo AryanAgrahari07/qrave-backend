@@ -11,8 +11,8 @@ export const razorpay = new Razorpay({
 });
 
 const PLANS = {
-  STARTER: { amount: 0, days: 7, isTrial: true },
-  PRO: { amount: 700, days: 30 },
+  STARTER: { amount: env.planStarterPrice, days: 7, isTrial: true },
+  PRO: { amount: env.planProPrice, days: 30 },
 };
 
 export function getAvailablePlans() {
@@ -227,4 +227,107 @@ export async function getSubscriptionHistory(restaurantId) {
     [restaurantId]
   );
   return result.rows;
+}
+
+export async function handleRazorpayWebhook(rawBody, signature, event) {
+  const webhookSecret = env.razorpayWebhookSecret || env.razorpayKeySecret || "test_secret";
+
+  if (webhookSecret !== "test_secret") {
+    // 1. Verify signature
+    const expectedSignature = crypto
+      .createHmac("sha256", webhookSecret)
+      .update(rawBody)
+      .digest("hex");
+
+    if (expectedSignature !== signature) {
+      throw new Error("Invalid webhook signature");
+    }
+  }
+
+  // 2. Process event
+  const { event: eventType, payload } = event;
+
+  if (eventType === "payment.captured" || eventType === "order.paid") {
+    // Both payment.captured and order.paid can be used to fulfill the order.
+    // Let's use the payment entity from whichever event fired.
+    const payment = payload.payment?.entity;
+    const orderId = payment?.order_id || payload.order?.entity?.id;
+
+    if (!orderId) {
+      console.warn("Razorpay webhook received without order_id");
+      return { success: false, reason: "No order_id found" };
+    }
+
+    // Find the pending subscription
+    const subResult = await pool.query(
+      `SELECT id, restaurant_id, plan, status FROM subscriptions WHERE razorpay_order_id = $1`,
+      [orderId]
+    );
+
+    if (subResult.rows.length === 0) {
+      // Order doesn't exist in our DB (could be a test transaction or from another system)
+      return { success: false, reason: "Order not found" };
+    }
+
+    const sub = subResult.rows[0];
+
+    // If it's already ACTIVE, do nothing (idempotency)
+    if (sub.status === 'ACTIVE') {
+       return { success: true, message: "Already processed" };
+    }
+
+    // Mark as ACTIVE
+    await pool.query(
+      `UPDATE subscriptions 
+       SET status = 'ACTIVE', razorpay_payment_id = $1, razorpay_signature = $2 
+       WHERE razorpay_order_id = $3`,
+      [payment.id, signature, orderId]
+    );
+
+    // Extend restaurant validity
+    const restaurantId = sub.restaurant_id;
+    const restResult = await pool.query(
+      `SELECT subscription_valid_until AS "validUntil" FROM restaurants WHERE id = $1`,
+      [restaurantId]
+    );
+    const currentValid = restResult.rows[0]?.validUntil;
+
+    let newValidUntil;
+    if (!currentValid || new Date(currentValid) < new Date()) {
+      const days = PLANS[sub.plan]?.days || 30;
+      const d = new Date();
+      d.setDate(d.getDate() + days);
+      newValidUntil = d;
+    } else {
+      const days = PLANS[sub.plan]?.days || 30;
+      const d = new Date(currentValid);
+      d.setDate(d.getDate() + days);
+      newValidUntil = d;
+    }
+
+    await pool.query(
+      `UPDATE restaurants 
+       SET subscription_valid_until = $1, subscription_status = 'ACTIVE', plan = $2
+       WHERE id = $3`,
+      [newValidUntil, sub.plan, restaurantId]
+    );
+
+    const redis = getRedisClient();
+    if (redis) await redis.del(`sub:status:${restaurantId}`);
+
+    return { success: true, orderId: orderId, action: "ACTIVATED" };
+  } else if (eventType === "payment.failed") {
+    const payment = payload.payment?.entity;
+    const orderId = payment?.order_id;
+    
+    if (orderId) {
+      await pool.query(
+        `UPDATE subscriptions SET status = 'FAILED', failure_reason = $1 WHERE razorpay_order_id = $2`,
+        [payment.error_description || 'Webhook reported payment failure', orderId]
+      );
+      return { success: true, orderId: orderId, action: "FAILED" };
+    }
+  }
+
+  return { success: true, message: "Event ignored" };
 }

@@ -271,6 +271,9 @@ export async function cancelOrderWithReason(restaurantId, orderId, cancelReason)
     .set({
       status: "CANCELLED",
       cancelReason: cancelReason.trim(),
+      isClosed: true,
+      paid_amount: "0",
+      paymentStatus: "DUE",
       updatedAt: new Date(),
       closedAt: new Date(),
     })
@@ -348,9 +351,12 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
             eq(orders.orderType, "DINE_IN"),
             eq(orders.isClosed, false), // ✅ CRITICAL: Only open orders
             // Include orders in any active state OR partially paid
-            or(
-              inArray(orders.status, ['PENDING', 'PREPARING', 'READY', 'SERVED']),
-              eq(orders.paymentStatus, 'PARTIALLY_PAID')
+            and(
+              not(eq(orders.status, 'CANCELLED')),
+              or(
+                inArray(orders.status, ['PENDING', 'PREPARING', 'READY', 'SERVED']),
+                eq(orders.paymentStatus, 'PARTIALLY_PAID')
+              )
             )
           ),
         )
@@ -394,7 +400,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
         }
 
         // Add items to existing order (this will handle payment status properly)
-        const { order: updatedOrder } = await addOrderItems(
+        const { order: updatedOrder, newItems } = await addOrderItems(
           restaurantId,
           existing.id,
           items,
@@ -403,7 +409,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
           tx // BUG-6: passing tx is now acceptable because we updated addOrderItems signature
         );
 
-        return await getOrder(restaurantId, existing.id);
+        return { order: await getOrder(restaurantId, existing.id), newItems };
       } else {
         // No open order found for table
       }
@@ -552,7 +558,7 @@ export async function createOrder(restaurantId, data, placedByStaffId = null) {
   emitOrderCreated(restaurantId, result);
   console.log({ event: 'order.created', orderId: result.id, restaurantId, totalAmount: result.totalAmount });
 
-  return result;
+  return { order: result };
   }); // end db.transaction
 }
 
@@ -867,6 +873,9 @@ export async function updateOrderStatus(restaurantId, orderId, status) {
   // If status is PAID, set closedAt
   if (status === "PAID") {
     updateData.closedAt = new Date();
+  } else if (status === "CANCELLED") {
+    updateData.closedAt = new Date();
+    updateData.isClosed = true;
   }
 
   const rows = await db
@@ -907,6 +916,46 @@ export async function updateOrderStatus(restaurantId, orderId, status) {
     }
 
     emitOrderStatusChanged(restaurantId, updated);
+
+    // ✅ NEW: Free the table if the order is CANCELLED (similar to closeOrder logic)
+    if (status === "CANCELLED" && updated.tableId) {
+      // Check if there are any other OPEN orders for this table
+      const otherOpenOrders = await db
+        .select()
+        .from(orders)
+        .where(
+          and(
+            eq(orders.restaurantId, restaurantId),
+            eq(orders.tableId, updated.tableId),
+            eq(orders.isClosed, false),
+            not(eq(orders.id, orderId))
+          )
+        )
+        .limit(1);
+
+      // If no other open orders, free the table
+      if (otherOpenOrders.length === 0) {
+        const tableRows = await db
+          .update(tables)
+          .set({
+            currentStatus: "AVAILABLE",
+            assignedWaiterId: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(tables.restaurantId, restaurantId),
+              eq(tables.id, updated.tableId)
+            )
+          )
+          .returning();
+        
+        if (tableRows[0]) {
+          emitTableStatusChanged(restaurantId, tableRows[0]);
+          console.log("✅ Table freed by cancellation via updateOrderStatus:", tableRows[0].tableNumber);
+        }
+      }
+    }
   }
   return updated;
 }
@@ -1368,8 +1417,9 @@ export async function getOrderStats(restaurantId, options = {}) {
   const stats = await db
     .select({
       totalOrders: sql`count(*)`,
-      totalRevenue: sql`sum(${orders.totalAmount})`,
-      avgOrderValue: sql`avg(${orders.totalAmount})`,
+      // ✅ FIX: Exclude CANCELLED orders from revenue stats (they are not real collected revenue)
+      totalRevenue: sql`sum(${orders.totalAmount}) filter (where ${orders.status} != 'CANCELLED' AND ${orders.paymentStatus} = 'PAID')`,
+      avgOrderValue: sql`avg(${orders.totalAmount}) filter (where ${orders.status} != 'CANCELLED' AND ${orders.paymentStatus} = 'PAID')`,
       pendingOrders: sql`count(*) filter (where ${orders.status} = 'PENDING')`,
       preparingOrders: sql`count(*) filter (where ${orders.status} = 'PREPARING')`,
       servedOrders: sql`count(*) filter (where ${orders.status} = 'SERVED')`,
@@ -1672,6 +1722,17 @@ export async function removeOrderItem(restaurantId, orderId, orderItemId) {
   const totalBeforeDiscount = newSubtotal + newGst + newService;
   discount = Math.min(discount, totalBeforeDiscount);
   const newTotal = Math.max(0, totalBeforeDiscount - discount);
+  // Calculate if payment status needs to shift (e.g. they paid early, then an item was removed)
+  const currentPaidAmount = parseFloat(order.paid_amount || "0");
+  let newPaymentStatus = order.paymentStatus;
+  
+  if (currentPaidAmount >= newTotal - 0.01 && newTotal > 0) {
+    newPaymentStatus = "PAID";
+  } else if (currentPaidAmount > 0 && currentPaidAmount < newTotal) {
+    newPaymentStatus = "PARTIALLY_PAID";
+  } else if (newTotal === 0) {
+    newPaymentStatus = "DUE";
+  }
 
   // Update order totals
   await db
@@ -1682,9 +1743,32 @@ export async function removeOrderItem(restaurantId, orderId, orderItemId) {
       serviceTaxAmount: newService.toFixed(2),
       discountAmount: discount.toFixed(2),
       totalAmount: newTotal.toFixed(2),
+      paymentStatus: newPaymentStatus,
+      // If the total drops below what was paid (which is rare but possible on a prepaid order), cap paid_amount to newTotal
+      paid_amount: Math.min(currentPaidAmount, newTotal).toFixed(2),
       updatedAt: new Date(),
     })
     .where(eq(orders.id, orderId));
+
+  // ✅ NEW: Sync transaction down if one already exists for this order
+  const existingTxnRows = await db
+    .select()
+    .from(transactions)
+    .where(eq(transactions.orderId, orderId))
+    .limit(1);
+
+  if (existingTxnRows[0]) {
+    await db
+      .update(transactions)
+      .set({
+        subtotal: newSubtotal.toFixed(2),
+        gstAmount: newGst.toFixed(2),
+        serviceTaxAmount: newService.toFixed(2),
+        discountAmount: discount.toFixed(2),
+        grandTotal: newTotal.toFixed(2),
+      })
+      .where(eq(transactions.id, existingTxnRows[0].id));
+  }
 
   const updatedOrder = await getOrder(restaurantId, orderId);
   if (updatedOrder) {

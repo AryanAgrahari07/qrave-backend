@@ -16,7 +16,7 @@ export async function getTableStats(restaurantId) {
          NULLIF(COUNT(*), 0) * 100), 0
       ) as occupancy_rate
     FROM tables
-    WHERE restaurant_id = $1
+    WHERE restaurant_id = $1 AND is_active = true
   `;
 
   const result = await pool.query(query, [restaurantId]);
@@ -48,15 +48,18 @@ export async function getOrderStats(restaurantId) {
   `;
 
   // Revenue should come from transactions (actual paid bills)
+  // ✅ FIX: JOIN orders to exclude transactions for CANCELLED orders
   const revenueQuery = `
     SELECT
-      COALESCE(SUM(grand_total), 0) as total_revenue,
+      COALESCE(SUM(t.grand_total), 0) as total_revenue,
       COUNT(*)::int as paid_orders,
-      COALESCE(AVG(grand_total), 0) as avg_order_value
-    FROM transactions
-    WHERE restaurant_id = $1
-      AND paid_at >= $2
-      AND paid_at < $3
+      COALESCE(AVG(t.grand_total), 0) as avg_order_value
+    FROM transactions t
+    JOIN orders o ON o.id = t.order_id
+    WHERE t.restaurant_id = $1
+      AND o.status != 'CANCELLED'
+      AND t.paid_at >= $2
+      AND t.paid_at < $3
   `;
 
   const [ordersResult, revenueResult] = await Promise.all([

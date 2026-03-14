@@ -18,22 +18,23 @@ function rolePrefix(role) {
   return "S";
 }
 
-async function generateNextStaffCode(role) {
+async function generateNextStaffCode(restaurantId, role) {
   const prefix = rolePrefix(role);
-  const like = `${prefix}%`;
+  // We need to order by the numeric part of the staff code.
+  // staff_code format is 'W-1000'
   const r = await writePool.query(
     `SELECT staff_code AS "staffCode"
      FROM staff
      WHERE staff_code LIKE $1
-     ORDER BY staff_code DESC
+     ORDER BY CAST(SUBSTRING(staff_code FROM length($1)) AS INTEGER) DESC
      LIMIT 1`,
-    [like],
+    [prefix + "-%"]
   );
 
   const last = r.rows[0]?.staffCode;
-  const lastNum = last ? Number(String(last).substring(prefix.length)) : 999;
-  const nextNum = Number.isFinite(lastNum) ? lastNum + 1 : 1000;
-  return `${prefix}${nextNum}`;
+  const lastNum = last ? Number(String(last).replace(prefix + "-", "")) : 999;
+  const nextNum = Number.isFinite(lastNum) && lastNum >= 1000 ? lastNum + 1 : 1000;
+  return `${prefix}-${nextNum}`;
 }
 
 export async function createStaff(restaurantId, data) {
@@ -42,7 +43,7 @@ export async function createStaff(restaurantId, data) {
   // Generate a human-friendly staff code (unique per restaurant).
   // Retry on conflict.
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const staffCode = await generateNextStaffCode(role);
+    const staffCode = await generateNextStaffCode(restaurantId, role);
 
     try {
       const result = await writePool.query(

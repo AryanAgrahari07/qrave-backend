@@ -119,11 +119,11 @@ export function registerRestaurantRoutes(app) {
     }),
   );
 
-  // Get by id - FIXED: Check ownership
+  // Get by id - FIXED: Check ownership + Staff access
   router.get(
     "/:id",
     requireAuth,
-    requireRole("owner", "platform_admin", "admin", "WAITER"),
+    requireRole("owner", "platform_admin", "admin", "WAITER", "KITCHEN"),
     asyncHandler(async (req, res) => {
       const restaurant = await getRestaurant(req.params.id);
       if (!restaurant) return res.status(404).json({ message: "Not found" });
@@ -135,7 +135,7 @@ export function registerRestaurantRoutes(app) {
       
       // Check if user has access to this restaurant
       // For owner/admin: check if they own it
-      // For WAITER: check if their restaurantId matches
+      // For WAITER/KITCHEN: check if their restaurantId matches
       const hasAccess = 
         restaurant.ownerId === req.user.id || 
         req.user.restaurantId === req.params.id;

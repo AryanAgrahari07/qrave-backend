@@ -132,7 +132,7 @@ export function registerOrderRoutes(app) {
         // console.log("============================");
         
         const { assignedWaiterId, ...orderData } = parsed.data;
-        const order = await createOrder(restaurantId, orderData, placedByStaffId);
+        const { order, newItems } = await createOrder(restaurantId, orderData, placedByStaffId);
         
         // If a waiter was selected for this order (admin placing order, or waiter placing on their own),
         // mirror that assignment onto the table so Floor Map shows the waiter name.
@@ -146,7 +146,7 @@ export function registerOrderRoutes(app) {
         }
         
         const enrichedOrder = await getOrder(restaurantId, order.id);
-        res.status(201).json({ order: enrichedOrder });
+        res.status(201).json({ order: enrichedOrder, newItems });
       } catch (error) {
         console.error("Order creation error:", error);
         res.status(400).json({
@@ -355,6 +355,33 @@ export function registerOrderRoutes(app) {
       }
 
       res.json({ item: updatedItem });
+    })
+  );
+
+  // Bulk update multiple order ITEM statuses (admin direct-serve)
+  router.patch(
+    "/:orderId/items/status-bulk",
+    requireRole("owner", "admin", "platform_admin"),
+    rateLimit({ keyPrefix: "orders:item-status-bulk", windowSeconds: 60, max: 200 }),
+    asyncHandler(async (req, res) => {
+      const { restaurantId, orderId } = req.params;
+      const parsed = z.object({
+        itemIds: z.array(z.string()).min(1),
+        status: z.enum(["PENDING", "PREPARING", "READY", "SERVED", "CANCELLED"]),
+      }).safeParse(req.body);
+
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.errors });
+      }
+
+      const { itemIds, status } = parsed.data;
+
+      // Update each item individually (reuses existing service which also checks all-served trigger)
+      const results = await Promise.all(
+        itemIds.map((itemId) => updateOrderItemStatus(restaurantId, orderId, itemId, status))
+      );
+
+      res.json({ updated: results.filter(Boolean).length, status });
     })
   );
 
