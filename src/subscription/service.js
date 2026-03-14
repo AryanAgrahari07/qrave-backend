@@ -186,19 +186,21 @@ export async function verifyPaymentAndActivate(restaurantId, razorpayOrderId, ra
 
   // Extend restaurant's validity
   const restResult = await pool.query(
-    `SELECT subscription_valid_until AS "validUntil" FROM restaurants WHERE id = $1`,
+    `SELECT subscription_valid_until AS "validUntil", plan AS "currentPlan" FROM restaurants WHERE id = $1`,
     [restaurantId]
   );
   const currentValid = restResult.rows[0]?.validUntil;
+  const currentPlan = restResult.rows[0]?.currentPlan;
   
   let newValidUntil;
-  if (!currentValid || new Date(currentValid) < new Date()) {
+  // If no active subscription, expired, or upgrading from free STARTER trial, start 30 days from today
+  if (!currentValid || new Date(currentValid) < new Date() || currentPlan === 'STARTER') {
     const days = PLANS[sub.plan]?.days || 30;
     const d = new Date();
     d.setDate(d.getDate() + days);
     newValidUntil = d;
   } else {
-    // Append
+    // If renewing an existing paid plan (e.g. PRO), append to existing validity
     const days = PLANS[sub.plan]?.days || 30;
     const d = new Date(currentValid);
     d.setDate(d.getDate() + days);
@@ -287,18 +289,21 @@ export async function handleRazorpayWebhook(rawBody, signature, event) {
     // Extend restaurant validity
     const restaurantId = sub.restaurant_id;
     const restResult = await pool.query(
-      `SELECT subscription_valid_until AS "validUntil" FROM restaurants WHERE id = $1`,
+      `SELECT subscription_valid_until AS "validUntil", plan AS "currentPlan" FROM restaurants WHERE id = $1`,
       [restaurantId]
     );
     const currentValid = restResult.rows[0]?.validUntil;
+    const currentPlan = restResult.rows[0]?.currentPlan;
 
     let newValidUntil;
-    if (!currentValid || new Date(currentValid) < new Date()) {
+    // If no active subscription, expired, or upgrading from free STARTER trial, start 30 days from today
+    if (!currentValid || new Date(currentValid) < new Date() || currentPlan === 'STARTER') {
       const days = PLANS[sub.plan]?.days || 30;
       const d = new Date();
       d.setDate(d.getDate() + days);
       newValidUntil = d;
     } else {
+      // If renewing an existing paid plan (e.g. PRO), append to existing validity
       const days = PLANS[sub.plan]?.days || 30;
       const d = new Date(currentValid);
       d.setDate(d.getDate() + days);
