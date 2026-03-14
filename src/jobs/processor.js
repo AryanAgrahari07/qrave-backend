@@ -81,7 +81,7 @@ export async function processExtractionJob(jobData) {
        FROM menu_extraction_jobs
        WHERE restaurant_id = $1 
          AND image_hash = $2 
-         AND status = 'COMPLETED'
+         AND status IN ('COMPLETED', 'CONFIRMED')
          AND created_at > NOW() - INTERVAL '30 days'
        LIMIT 1`,
       [restaurantId, imageHash]
@@ -93,7 +93,17 @@ export async function processExtractionJob(jobData) {
 
     if (duplicate.rows.length > 0) {
       console.log(`[Processor] Using cached extraction from job ${duplicate.rows[0].id}`);
-      extractedData = duplicate.rows[0].extracted_data;
+      
+      let rawData = duplicate.rows[0].extracted_data;
+      if (typeof rawData === 'string') {
+        try {
+          rawData = JSON.parse(rawData);
+        } catch (e) {
+          console.error('[Processor] Failed to parse cached extracted_data:', e);
+        }
+      }
+      
+      extractedData = rawData;
       confidence = duplicate.rows[0].extraction_confidence;
     } else {
       // Extract with AI (use converted buffer and MIME type)
@@ -105,6 +115,7 @@ export async function processExtractionJob(jobData) {
     }
 
     const processingTime = Date.now() - startTime;
+    const itemsExtracted = (extractedData?.categories || []).reduce((sum, cat) => sum + (cat.items?.length || 0), 0);
 
     // Update job with results
     await pool.query(
@@ -124,7 +135,7 @@ export async function processExtractionJob(jobData) {
         modelUsed,
         imageHash,
         processingTime,
-        extractedData.categories.reduce((sum, cat) => sum + cat.items.length, 0),
+        itemsExtracted,
         jobId,
       ]
     );
